@@ -412,7 +412,7 @@ jobs:
                               override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                                   webView.evaluateJavascript("if(window.onBiometricSuccess) window.onBiometricSuccess();", null)
                               }
-                          } 
+                          }) 
                           val info = BiometricPrompt.PromptInfo.Builder()
                               .setTitle("Biometric Authentication")
                               .setNegativeButtonText("Cancel")
