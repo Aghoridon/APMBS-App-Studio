@@ -1,4 +1,4 @@
-name: Build APMBS App Studio (100% Offline Kotlin)
+name: Build APMBS App Studio v2.0 (100% Offline Kotlin)
 
 on:
   workflow_dispatch:
@@ -24,22 +24,16 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Generate Default 512x512 PNG Icons
+      - name: Set App Icon (Custom or Default)
         run: |
-          python3 - << 'PYEOF'
-          import zlib, struct, os
-          def make_png(path, r, g, b):
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              w, h = 512, 512
-              raw = b"".join(b"\x00" + bytes([r, g, b, 255]) * w for _ in range(h))
-              def chunk(tag, data):
-                  return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xffffffff)
-              png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")
-              with open(path, "wb") as f:
-                  f.write(png)
-          make_png("template/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png", 99, 102, 241)
-          make_png("studio/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png", 79, 70, 229)
-          PYEOF
+          mkdir -p template/app/src/main/res/mipmap-xxxhdpi
+          mkdir -p studio/app/src/main/res/mipmap-xxxhdpi
+          if [ -f "icon.png" ]; then
+            cp icon.png studio/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            cp icon.png template/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          else
+            python3 -c 'import zlib,struct; w=h=512; raw=b"".join(b"\x00"+bytes([79,70,229,255])*w for _ in range(h)); c=lambda t,d: struct.pack("!I",len(d))+t+d+struct.pack("!I",zlib.crc32(t+d)&0xffffffff); png=b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack("!IIBBBBB",w,h,8,6,0,0,0))+c(b"IDAT",zlib.compress(raw,6))+c(b"IEND",b""); open("studio/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png","wb").write(png); open("template/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png","wb").write(png)'
+          fi
 
       - name: Create Runtime Base Template Project
         run: |
@@ -103,22 +97,27 @@ jobs:
               implementation 'androidx.core:core-ktx:1.13.1'
               implementation 'androidx.appcompat:appcompat:1.7.0'
               implementation 'androidx.biometric:biometric:1.1.0'
+              implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
           }
           EOF
 
           cat << 'EOF' > template/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              >
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.VIBRATE" />
               <uses-permission android:name="android.permission.CAMERA" />
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -149,7 +148,7 @@ jobs:
           EOF
 
           cat << 'EOF' > template/app/src/main/assets/app_config.json
-          {"appName":"APMBS App","mode":"HTML","enableSplash":true,"splashBgColor":"#0D0E12","splashTextColor":"#FFFFFF","orientation":"Portrait","fixedTextSize":true,"enableZoom":true,"copyProtection":false,"appPinLock":"","whatsNewMsg":""}
+          {"appName":"APMBS App","mode":"HTML","enableSplash":true,"splashDuration":1.5,"splashBgColor":"#0D0E12","splashTextColor":"#FFFFFF","statusBarColor":"#0D0E12","lightStatusBar":false,"showProgressBar":true,"progressBarColor":"#6366F1","orientation":"Portrait","fixedTextSize":true,"enableZoom":true,"copyProtection":false,"blockScreenshots":false,"keepScreenOn":false,"confirmExit":false,"pullToRefresh":false,"appPinLock":"","whatsNewMsg":""}
           EOF
 
           cat << 'KOTLINEOF' > template/app/src/main/java/com/apmbs/templateapp/MainActivity.kt
@@ -161,6 +160,8 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ActivityInfo
+          import android.content.res.ColorStateList
+          import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.net.Uri
           import android.os.*
@@ -169,21 +170,26 @@ jobs:
           import android.util.Base64
           import android.view.Gravity
           import android.view.View
+          import android.view.WindowManager
           import android.webkit.*
           import android.widget.*
           import androidx.activity.OnBackPressedCallback
           import androidx.appcompat.app.AppCompatActivity
           import androidx.biometric.BiometricPrompt
+          import androidx.core.app.ActivityCompat
           import androidx.core.content.ContextCompat
           import androidx.core.view.WindowCompat
           import androidx.core.view.WindowInsetsCompat
           import androidx.core.view.WindowInsetsControllerCompat
+          import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
           import org.json.JSONObject
           import java.io.File
           import java.io.FileOutputStream
 
           class MainActivity : AppCompatActivity() {
               private lateinit var webView: WebView
+              private lateinit var swipeRefresh: SwipeRefreshLayout
+              private lateinit var topProgress: ProgressBar
               private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
 
               @SuppressLint("SetJavaScriptEnabled")
@@ -194,6 +200,20 @@ jobs:
                       assets.open("app_config.json").bufferedReader().use { it.readText() }
                   } catch (e: Exception) { "{}" }
                   val cfg = JSONObject(configStr)
+
+                  if (cfg.optBoolean("blockScreenshots", false)) {
+                      window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+                  }
+                  if (cfg.optBoolean("keepScreenOn", false)) {
+                      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  }
+
+                  try {
+                      val sbColor = Color.parseColor(cfg.optString("statusBarColor", "#0D0E12"))
+                      window.statusBarColor = sbColor
+                      WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars =
+                          cfg.optBoolean("lightStatusBar", false)
+                  } catch (_: Exception) {}
 
                   when (cfg.optString("orientation", "Portrait")) {
                       "Portrait" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -210,24 +230,47 @@ jobs:
                   }
 
                   val root = FrameLayout(this)
+                  swipeRefresh = SwipeRefreshLayout(this).apply {
+                      isEnabled = cfg.optBoolean("pullToRefresh", false)
+                      setOnRefreshListener { webView.reload() }
+                  }
                   webView = WebView(this)
-                  root.addView(webView, FrameLayout.LayoutParams(
+                  swipeRefresh.addView(webView)
+                  root.addView(swipeRefresh, FrameLayout.LayoutParams(
                       FrameLayout.LayoutParams.MATCH_PARENT,
                       FrameLayout.LayoutParams.MATCH_PARENT
                   ))
 
+                  topProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                      max = 100
+                      visibility = View.GONE
+                      try {
+                          progressTintList = ColorStateList.valueOf(Color.parseColor(cfg.optString("progressBarColor", "#6366F1")))
+                      } catch (_: Exception) {}
+                  }
+                  root.addView(topProgress, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 10))
+
                   val enableSplash = cfg.optBoolean("enableSplash", true)
+                  val splashDurMs = ((cfg.optDouble("splashDuration", 1.5)) * 1000).toLong().coerceIn(500L, 6000L)
                   val splashLayout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       setBackgroundColor(try { Color.parseColor(cfg.optString("splashBgColor", "#0D0E12")) } catch (e: Exception) { Color.BLACK })
                       val iconView = ImageView(this@MainActivity).apply {
-                          setImageResource(R.mipmap.ic_launcher)
-                          layoutParams = LinearLayout.LayoutParams(220, 220)
+                          val spImg = cfg.optString("splashImageDataUrl", "")
+                          if (spImg.contains(",")) {
+                              try {
+                                  val b = Base64.decode(spImg.substringAfter(","), Base64.DEFAULT)
+                                  setImageBitmap(BitmapFactory.decodeByteArray(b, 0, b.size))
+                              } catch (_: Exception) { setImageResource(R.mipmap.ic_launcher) }
+                          } else {
+                              setImageResource(R.mipmap.ic_launcher)
+                          }
+                          layoutParams = LinearLayout.LayoutParams(240, 240)
                       }
                       val titleView = TextView(this@MainActivity).apply {
                           text = cfg.optString("appName", "APMBS App")
-                          textSize = 20f
+                          textSize = 21f
                           setTextColor(try { Color.parseColor(cfg.optString("splashTextColor", "#FFFFFF")) } catch (e: Exception) { Color.WHITE })
                           setPadding(0, 32, 0, 16)
                       }
@@ -244,7 +287,7 @@ jobs:
                       ))
                       Handler(Looper.getMainLooper()).postDelayed({
                           splashLayout.visibility = View.GONE
-                      }, 1300)
+                      }, splashDurMs)
                   }
 
                   setContentView(root)
@@ -255,12 +298,11 @@ jobs:
                       databaseEnabled = true
                       allowFileAccess = true
                       allowContentAccess = true
+                      mediaPlaybackRequiresUserGesture = false
                       setSupportZoom(cfg.optBoolean("enableZoom", true))
                       builtInZoomControls = cfg.optBoolean("enableZoom", true)
                       displayZoomControls = false
-                      if (cfg.optBoolean("fixedTextSize", true)) {
-                          textZoom = 100
-                      }
+                      if (cfg.optBoolean("fixedTextSize", true)) textZoom = 100
                   }
 
                   if (cfg.optBoolean("copyProtection", false)) {
@@ -272,6 +314,8 @@ jobs:
                   webView.webViewClient = object : WebViewClient() {
                       override fun onPageFinished(view: WebView?, url: String?) {
                           super.onPageFinished(view, url)
+                          swipeRefresh.isRefreshing = false
+                          topProgress.visibility = View.GONE
                           val wn = cfg.optString("whatsNewMsg", "")
                           val ver = cfg.optString("version", "1.0.0")
                           if (wn.isNotEmpty()) {
@@ -286,9 +330,25 @@ jobs:
                               }
                           }
                       }
+
+                      override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                          if (request?.isForMainFrame == true && cfg.optString("mode", "HTML") == "Website") {
+                              val errHtml = "<html><body style='background:#0D0E12;color:#fff;font-family:sans-serif;text-align:center;padding-top:35vh;'><h2>📡 No Internet Connection</h2><p style='color:#9CA3AF;'>Please check your network and try again.</p><button onclick='location.reload()' style='background:#6366F1;color:#fff;border:none;padding:12px 24px;border-radius:10px;font-size:15px;'>Retry</button></body></html>"
+                              view?.loadDataWithBaseURL(null, errHtml, "text/html", "UTF-8", null)
+                          }
+                      }
                   }
 
                   webView.webChromeClient = object : WebChromeClient() {
+                      override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                          if (cfg.optBoolean("showProgressBar", true)) {
+                              topProgress.visibility = if (newProgress < 100) View.VISIBLE else View.GONE
+                              topProgress.progress = newProgress
+                          }
+                      }
+                      override fun onPermissionRequest(request: PermissionRequest?) {
+                          runOnUiThread { request?.grant(request.resources) }
+                      }
                       override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: GeolocationPermissions.Callback?) {
                           callback?.invoke(origin, true, false)
                       }
@@ -311,6 +371,8 @@ jobs:
                       }
                   }
 
+                  requestConfiguredPermissions(cfg)
+
                   val pin = cfg.optString("appPinLock", "")
                   if (pin.isNotEmpty()) {
                       val input = EditText(this).apply {
@@ -321,7 +383,7 @@ jobs:
                           .setTitle("🔒 App Locked")
                           .setView(input)
                           .setCancelable(false)
-                          .setPositiveButton("Unlock") { _, _ ->
+                                                    .setPositiveButton("Unlock") { _, _ ->
                               if (input.text.toString() == pin) loadAppContent(cfg)
                               else finish()
                           }
@@ -332,19 +394,50 @@ jobs:
 
                   onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
                       override fun handleOnBackPressed() {
-                          if (webView.canGoBack()) webView.goBack()
-                          else finish()
+                          if (webView.canGoBack()) {
+                              webView.goBack()
+                          } else if (cfg.optBoolean("confirmExit", false)) {
+                              AlertDialog.Builder(this@MainActivity)
+                                  .setTitle("Exit App")
+                                  .setMessage("Are you sure you want to exit?")
+                                  .setPositiveButton("Exit") { _, _ -> finish() }
+                                  .setNegativeButton("Cancel", null)
+                                  .show()
+                          } else {
+                              finish()
+                          }
                       }
                   })
+              }
+
+              private fun requestConfiguredPermissions(cfg: JSONObject) {
+                  val permsArr = cfg.optJSONArray("permissions") ?: return
+                  val reqList = mutableListOf<String>()
+                  for (i in 0 until permsArr.length()) {
+                      when (permsArr.optString(i)) {
+                          "CAMERA" -> reqList.add(android.Manifest.permission.CAMERA)
+                          "MIC" -> reqList.add(android.Manifest.permission.RECORD_AUDIO)
+                          "LOCATION" -> reqList.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                          "CONTACTS" -> reqList.add(android.Manifest.permission.READ_CONTACTS)
+                          "NOTIFICATIONS" -> if (Build.VERSION.SDK_INT >= 33) reqList.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                          "BLUETOOTH" -> if (Build.VERSION.SDK_INT >= 31) reqList.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+                      }
+                  }
+                  val missing = reqList.filter {
+                      ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                  }
+                  if (missing.isNotEmpty()) {
+                      ActivityCompat.requestPermissions(this, missing.toTypedArray(), 3001)
+                  }
               }
 
               private fun loadAppContent(cfg: JSONObject) {
                   val mode = cfg.optString("mode", "HTML")
                   val url = cfg.optString("websiteUrl", "")
-                  if (mode == "Website" && url.startsWith("http")) {
-                      webView.loadUrl(url)
-                  } else {
-                      webView.loadUrl("file:///android_asset/index.html")
+                  when {
+                      mode == "Website" && url.startsWith("http") -> webView.loadUrl(url)
+                      mode == "Offline ZIP" -> webView.loadUrl("file:///android_asset/www/index.html")
+                      else -> webView.loadUrl("file:///android_asset/index.html")
                   }
               }
 
@@ -412,7 +505,7 @@ jobs:
                               override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                                   webView.evaluateJavascript("if(window.onBiometricSuccess) window.onBiometricSuccess();", null)
                               }
-                          }) 
+                          })
                           val info = BiometricPrompt.PromptInfo.Builder()
                               .setTitle("Biometric Authentication")
                               .setNegativeButtonText("Cancel")
@@ -424,7 +517,7 @@ jobs:
           }
           KOTLINEOF
 
-      - name: Compile Base Template APK
+            - name: Compile Base Template APK
         working-directory: template
         run: gradle assembleRelease
 
@@ -473,8 +566,8 @@ jobs:
                   applicationId "com.apmbs.appstudio"
                   minSdk 24
                   targetSdk 34
-                  versionCode 10000
-                  versionName "1.0.0"
+                  versionCode 20000
+                  versionName "2.0.0"
               }
               buildTypes {
                   release {
@@ -482,13 +575,12 @@ jobs:
                       signingConfig signingConfigs.debug
                   }
               }
-                            packaging {
+              packaging {
                   resources {
                       excludes += ['META-INF/INDEX.LIST', 'META-INF/DEPENDENCIES', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA']
                       pickFirsts += ['META-INF/**']
                   }
               }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
@@ -517,8 +609,7 @@ jobs:
 
           cat << 'EOF' > studio/app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              >
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -563,12 +654,9 @@ jobs:
           object AxmlPatcher {
               fun patchManifest(axmlBytes: ByteArray, replacements: Map<String, String>, newVersionCode: Int): ByteArray {
                   val buf = ByteBuffer.wrap(axmlBytes).order(ByteOrder.LITTLE_ENDIAN)
-                  val magic = buf.getInt(0)
-                  if (magic != 0x00080003) return axmlBytes
-
+                  if (buf.getInt(0) != 0x00080003) return axmlBytes
                   val spOffset = 8
-                  val spType = buf.getInt(spOffset)
-                  if (spType != 0x001C0001) return axmlBytes
+                  if (buf.getInt(spOffset) != 0x001C0001) return axmlBytes
 
                   val spChunkSize = buf.getInt(spOffset + 4)
                   val stringCount = buf.getInt(spOffset + 8)
@@ -581,9 +669,7 @@ jobs:
                   val offsetsStart = spOffset + 28
                   val strOffsets = IntArray(stringCount) { i -> buf.getInt(offsetsStart + i * 4) }
                   val styleOffsetsBytes = ByteArray(styleCount * 4)
-                  if (styleCount > 0) {
-                      System.arraycopy(axmlBytes, offsetsStart + stringCount * 4, styleOffsetsBytes, 0, styleOffsetsBytes.size)
-                  }
+                  if (styleCount > 0) System.arraycopy(axmlBytes, offsetsStart + stringCount * 4, styleOffsetsBytes, 0, styleOffsetsBytes.size)
 
                   val dataBase = spOffset + stringsStart
                   val strings = MutableList(stringCount) { i ->
@@ -593,42 +679,31 @@ jobs:
 
                   for (i in strings.indices) {
                       val orig = strings[i]
-                      if (replacements.containsKey(orig)) {
-                          strings[i] = replacements[orig]!!
-                      }
+                      if (replacements.containsKey(orig)) strings[i] = replacements[orig]!!
                   }
 
                   val newStringsData = ByteArrayOutputStream()
                   val newOffsets = IntArray(stringCount)
                   for (i in strings.indices) {
                       newOffsets[i] = newStringsData.size()
-                      if (isUtf8) writeUtf8String(newStringsData, strings[i])
-                      else writeUtf16String(newStringsData, strings[i])
+                      if (isUtf8) writeUtf8String(newStringsData, strings[i]) else writeUtf16String(newStringsData, strings[i])
                   }
 
                   val stylesDataLen = if (styleCount > 0 && stylesStart > 0) (spChunkSize - stylesStart) else 0
-                  val stylesData = if (stylesDataLen > 0) {
-                      axmlBytes.copyOfRange(spOffset + stylesStart, spOffset + spChunkSize)
-                  } else ByteArray(0)
-
-                  while (newStringsData.size() % 4 != 0) {
-                      newStringsData.write(0)
-                  }
+                  val stylesData = if (stylesDataLen > 0) axmlBytes.copyOfRange(spOffset + stylesStart, spOffset + spChunkSize) else ByteArray(0)
+                  while (newStringsData.size() % 4 != 0) newStringsData.write(0)
 
                   val newStringsStart = 28 + stringCount * 4 + styleCount * 4
                   val newStylesStart = if (styleCount > 0) (newStringsStart + newStringsData.size()) else 0
                   val newSpChunkSize = newStringsStart + newStringsData.size() + stylesData.size
 
-                  val restOffset = spOffset + spChunkSize
-                  val restBytes = axmlBytes.copyOfRange(restOffset, axmlBytes.size)
-
+                  val restBytes = axmlBytes.copyOfRange(spOffset + spChunkSize, axmlBytes.size)
                   val restBuf = ByteBuffer.wrap(restBytes).order(ByteOrder.LITTLE_ENDIAN)
                   var p = 0
                   while (p <= restBytes.size - 8) {
                       if (restBytes[p] == 0x08.toByte() && restBytes[p + 1] == 0x00.toByte() &&
                           restBytes[p + 2] == 0x00.toByte() && restBytes[p + 3] == 0x10.toByte()) {
-                          val v = restBuf.getInt(p + 4)
-                          if (v == 10000) {
+                          if (restBuf.getInt(p + 4) == 10000) {
                               restBuf.putInt(p + 4, newVersionCode)
                               break
                           }
@@ -638,22 +713,12 @@ jobs:
 
                   val totalSize = 8 + newSpChunkSize + restBytes.size
                   val out = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN)
-                  out.putInt(0x00080003)
-                  out.putInt(totalSize)
-
-                  out.putInt(0x001C0001)
-                  out.putInt(newSpChunkSize)
-                  out.putInt(stringCount)
-                  out.putInt(styleCount)
-                  out.putInt(flags)
-                  out.putInt(newStringsStart)
-                  out.putInt(newStylesStart)
+                  out.putInt(0x00080003); out.putInt(totalSize)
+                  out.putInt(0x001C0001); out.putInt(newSpChunkSize)
+                  out.putInt(stringCount); out.putInt(styleCount)
+                  out.putInt(flags); out.putInt(newStringsStart); out.putInt(newStylesStart)
                   for (off in newOffsets) out.putInt(off)
-                  out.put(styleOffsetsBytes)
-                  out.put(newStringsData.toByteArray())
-                  out.put(stylesData)
-                  out.put(restBytes)
-
+                  out.put(styleOffsetsBytes); out.put(newStringsData.toByteArray()); out.put(stylesData); out.put(restBytes)
                   return out.array()
               }
 
@@ -662,12 +727,7 @@ jobs:
                   val u16 = data[p].toInt() and 0xFF
                   p += if ((u16 and 0x80) != 0) 2 else 1
                   var u8 = data[p].toInt() and 0xFF
-                  if ((u8 and 0x80) != 0) {
-                      u8 = ((u8 and 0x7F) shl 8) or (data[p + 1].toInt() and 0xFF)
-                      p += 2
-                  } else {
-                      p += 1
-                  }
+                  if ((u8 and 0x80) != 0) { u8 = ((u8 and 0x7F) shl 8) or (data[p + 1].toInt() and 0xFF); p += 2 } else p += 1
                   return String(data, p, u8, Charsets.UTF_8)
               }
 
@@ -675,45 +735,27 @@ jobs:
                   val u16Len = s.length
                   val utf8 = s.toByteArray(Charsets.UTF_8)
                   val u8Len = utf8.size
-                  if (u16Len >= 0x80) {
-                      out.write(((u16Len shr 8) or 0x80) and 0xFF)
-                      out.write(u16Len and 0xFF)
-                  } else {
-                      out.write(u16Len)
-                  }
-                  if (u8Len >= 0x80) {
-                      out.write(((u8Len shr 8) or 0x80) and 0xFF)
-                      out.write(u8Len and 0xFF)
-                  } else {
-                      out.write(u8Len)
-                  }
-                  out.write(utf8)
-                  out.write(0)
+                  if (u16Len >= 0x80) { out.write(((u16Len shr 8) or 0x80) and 0xFF); out.write(u16Len and 0xFF) } else out.write(u16Len)
+                  if (u8Len >= 0x80) { out.write(((u8Len shr 8) or 0x80) and 0xFF); out.write(u8Len and 0xFF) } else out.write(u8Len)
+                  out.write(utf8); out.write(0)
               }
 
               private fun readUtf16String(data: ByteArray, offset: Int): String {
                   val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
                   var len = buf.getShort(offset).toInt() and 0xFFFF
                   var p = offset + 2
-                  if ((len and 0x8000) != 0) {
-                      len = ((len and 0x7FFF) shl 16) or (buf.getShort(p).toInt() and 0xFFFF)
-                      p += 2
-                  }
+                  if ((len and 0x8000) != 0) { len = ((len and 0x7FFF) shl 16) or (buf.getShort(p).toInt() and 0xFFFF); p += 2 }
                   return String(data, p, len * 2, Charsets.UTF_16LE)
               }
 
               private fun writeUtf16String(out: ByteArrayOutputStream, s: String) {
                   val len = s.length
-                  out.write(len and 0xFF)
-                  out.write((len shr 8) and 0xFF)
-                  out.write(s.toByteArray(Charsets.UTF_16LE))
-                  out.write(0)
-                  out.write(0)
+                  out.write(len and 0xFF); out.write((len shr 8) and 0xFF)
+                  out.write(s.toByteArray(Charsets.UTF_16LE)); out.write(0); out.write(0)
               }
           }
           KOTLINEOF
-
-          cat << 'KOTLINEOF' > studio/app/src/main/java/com/apmbs/appstudio/KeystoreManager.kt
+                    cat << 'KOTLINEOF' > studio/app/src/main/java/com/apmbs/appstudio/KeystoreManager.kt
           package com.apmbs.appstudio
 
           import android.content.Context
@@ -721,6 +763,8 @@ jobs:
           import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
           import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
           import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
+          import org.json.JSONObject
+          import java.io.ByteArrayInputStream
           import java.io.File
           import java.io.FileInputStream
           import java.io.FileOutputStream
@@ -743,12 +787,39 @@ jobs:
                   val p12File: File
               )
 
+              fun importCustomKeystore(context: Context, packageName: String, p12Base64: String, passwordStr: String, aliasInput: String): String {
+                  val dir = File(context.filesDir, "keystores").apply { mkdirs() }
+                  val safePkg = packageName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                  val p12File = File(dir, "$safePkg.p12")
+                  val metaFile = File(dir, "$safePkg.meta.json")
+                  val bytes = Base64.decode(p12Base64.substringAfter(","), Base64.DEFAULT)
+                  val pass = passwordStr.toCharArray()
+
+                  val ks = KeyStore.getInstance("PKCS12")
+                  ks.load(ByteArrayInputStream(bytes), pass)
+                  val alias = if (aliasInput.isNotBlank() && ks.containsAlias(aliasInput)) aliasInput
+                  else ks.aliases().toList().firstOrNull { ks.isKeyEntry(it) } ?: throw Exception("No private key entry found in .p12")
+
+                  FileOutputStream(p12File).use { it.write(bytes) }
+                  val meta = JSONObject().apply { put("password", passwordStr); put("alias", alias) }
+                  metaFile.writeText(meta.toString())
+                  return alias
+              }
+
               fun getOrCreateKeystore(context: Context, packageName: String, appName: String): AppKeyMaterial {
                   val dir = File(context.filesDir, "keystores").apply { mkdirs() }
                   val safePkg = packageName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
                   val p12File = File(dir, "$safePkg.p12")
-                  val pass = "apmbs_keystore_pass".toCharArray()
-                  val alias = "apmbs_key"
+                  val metaFile = File(dir, "$safePkg.meta.json")
+
+                  var passStr = "apmbs_keystore_pass"
+                  var alias = "apmbs_key"
+                  if (metaFile.exists()) {
+                      val meta = JSONObject(metaFile.readText())
+                      passStr = meta.optString("password", passStr)
+                      alias = meta.optString("alias", alias)
+                  }
+                  val pass = passStr.toCharArray()
 
                   val ks = KeyStore.getInstance("PKCS12")
                   if (p12File.exists()) {
@@ -758,17 +829,10 @@ jobs:
                       val kpg = KeyPairGenerator.getInstance("RSA")
                       kpg.initialize(2048)
                       val kp = kpg.generateKeyPair()
-
                       val dn = X500Principal("CN=$appName, O=APMBS App Studio, C=IN")
                       val now = System.currentTimeMillis()
-                      val start = Date(now - 86400000L)
-                      val end = Date(now + 30L * 365 * 86400000L)
-                      val serial = BigInteger.valueOf(now)
-
-                      val builder = JcaX509v3CertificateBuilder(dn, serial, start, end, dn, kp.public)
-                      val signer = JcaContentSignerBuilder("SHA256withRSA").build(kp.private)
-                      val cert = JcaX509CertificateConverter().getCertificate(builder.build(signer))
-
+                      val builder = JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now), Date(now - 86400000L), Date(now + 30L * 365 * 86400000L), dn, kp.public)
+                      val cert = JcaX509CertificateConverter().getCertificate(builder.build(JcaContentSignerBuilder("SHA256withRSA").build(kp.private)))
                       ks.setKeyEntry(alias, kp.private, pass, arrayOf(cert))
                       FileOutputStream(p12File).use { ks.store(it, pass) }
                   }
@@ -776,18 +840,11 @@ jobs:
                   val privKey = ks.getKey(alias, pass) as PrivateKey
                   val cert = ks.getCertificate(alias) as X509Certificate
                   val der = cert.encoded
-
-                  val sha1 = digestColonHex("SHA-1", der)
-                  val sha256 = digestColonHex("SHA-256", der)
+                  val sha1 = MessageDigest.getInstance("SHA-1").digest(der).joinToString(":") { "%02X".format(it) }
+                  val sha256 = MessageDigest.getInstance("SHA-256").digest(der).joinToString(":") { "%02X".format(it) }
                   val b64 = Base64.encodeToString(der, Base64.NO_WRAP).chunked(64).joinToString("\n")
                   val pem = "-----BEGIN CERTIFICATE-----\n$b64\n-----END CERTIFICATE-----"
-
                   return AppKeyMaterial(privKey, cert, sha1, sha256, pem, p12File)
-              }
-
-              private fun digestColonHex(algo: String, bytes: ByteArray): String {
-                  val md = MessageDigest.getInstance(algo).digest(bytes)
-                  return md.joinToString(":") { "%02X".format(it) }
               }
           }
           KOTLINEOF
@@ -807,42 +864,31 @@ jobs:
           import java.util.zip.*
 
           object OfflineApkBuilder {
-
               class CountingOutputStream(out: OutputStream) : FilterOutputStream(out) {
                   var count: Long = 0
-                  override fun write(b: Int) {
-                      out.write(b)
-                      count++
-                  }
-                  override fun write(b: ByteArray, off: Int, len: Int) {
-                      out.write(b, off, len)
-                      count += len
-                  }
+                  override fun write(b: Int) { out.write(b); count++ }
+                  override fun write(b: ByteArray, off: Int, len: Int) { out.write(b, off, len); count += len }
               }
 
-              fun buildSignedApk(
-                  context: Context,
-                  configJsonStr: String,
-                  finalHtmlStr: String,
-                  onProgress: (Int, String) -> Unit
-              ): JSONObject {
+              fun buildSignedApk(context: Context, configJsonStr: String, finalHtmlStr: String, onProgress: (Int, String) -> Unit): JSONObject {
                   val cfg = JSONObject(configJsonStr)
-                  val appName = cfg.optString("appName", "APMBS App").trim()
-                  val packageName = cfg.optString("packageName", "com.apmbs.customapp").trim()
-                  val versionName = cfg.optString("version", "1.0.0").trim()
+                  val appName = cfg.optString("appName", "APMBS App").trim().ifEmpty { "APMBS App" }
+                  val packageName = cfg.optString("packageName", "com.apmbs.customapp").trim().ifEmpty { "com.apmbs.customapp" }
+                  val versionName = cfg.optString("version", "1.0.0").trim().ifEmpty { "1.0.0" }
                   val parts = versionName.split(".").map { it.toIntOrNull() ?: 0 }
                   val versionCode = (parts.getOrElse(0) { 1 }) * 10000 + (parts.getOrElse(1) { 0 }) * 100 + (parts.getOrElse(2) { 0 })
                   val iconDataUrl = cfg.optString("iconDataUrl", "")
+                  val mode = cfg.optString("mode", "HTML")
+                  val zipDataUrl = cfg.optString("zipDataUrl", "")
 
-                  onProgress(20, "Generating RSA-2048 Keystore & SHA-256 Certificate...")
+                  onProgress(20, "Loading RSA-2048 Keystore & SHA-256 Certificate...")
                   val keyMaterial = KeystoreManager.getOrCreateKeystore(context, packageName, appName)
 
-                  onProgress(45, "Patching Binary AndroidManifest.xml & App Icon...")
+                  onProgress(45, "Patching Binary AndroidManifest.xml & Packaging Assets...")
                   val workDir = File(context.cacheDir, "apk_build_${System.currentTimeMillis()}").apply { mkdirs() }
                   val unsignedApk = File(workDir, "unsigned.apk")
-
                   val customIconBytes: ByteArray? = if (iconDataUrl.contains(",")) {
-                      try { Base64.decode(iconDataUrl.substringAfter(","), Base64.DEFAULT) } catch (e: Exception) { null }
+                      try { Base64.decode(iconDataUrl.substringAfter(","), Base64.DEFAULT) } catch (_: Exception) { null }
                   } else null
 
                   val cos = CountingOutputStream(BufferedOutputStream(FileOutputStream(unsignedApk)))
@@ -856,45 +902,54 @@ jobs:
                           if (!entry.isDirectory && !name.startsWith("META-INF/")) {
                               val rawBytes = zis.readBytes()
                               val outBytes = when {
-                                  name == "AndroidManifest.xml" -> {
-                                      AxmlPatcher.patchManifest(
-                                          rawBytes,
-                                          mapOf(
-                                              "com.apmbs.templateapp" to packageName,
-                                              "APMBS_APP_LABEL_PLACEHOLDER" to appName,
-                                              "1.0.0" to versionName
-                                          ),
-                                          versionCode
-                                      )
-                                  }
+                                  name == "AndroidManifest.xml" -> AxmlPatcher.patchManifest(
+                                      rawBytes,
+                                      mapOf("com.apmbs.templateapp" to packageName, "APMBS_APP_LABEL_PLACEHOLDER" to appName, "1.0.0" to versionName),
+                                      versionCode
+                                  )
                                   name == "assets/index.html" -> finalHtmlStr.toByteArray(Charsets.UTF_8)
                                   name == "assets/app_config.json" -> configJsonStr.toByteArray(Charsets.UTF_8)
                                   customIconBytes != null && name.contains("ic_launcher") && name.endsWith(".png") -> customIconBytes
                                   else -> rawBytes
                               }
-
                               if (name == "resources.arsc") {
-                                  val nameBytes = name.toByteArray(Charsets.UTF_8)
-                                  val headerBase = cos.count + 30 + nameBytes.size
+                                  val headerBase = cos.count + 30 + name.toByteArray(Charsets.UTF_8).size
                                   val pad = ((4 - (headerBase % 4)) % 4).toInt()
                                   val ze = ZipEntry(name).apply {
                                       method = ZipEntry.STORED
-                                      size = outBytes.size.toLong()
-                                      compressedSize = outBytes.size.toLong()
-                                      crc = computeCrc32(outBytes)
+                                      size = outBytes.size.toLong(); compressedSize = outBytes.size.toLong()
+                                      crc = CRC32().apply { update(outBytes) }.value
                                       if (pad > 0) extra = ByteArray(pad)
                                   }
-                                  zos.putNextEntry(ze)
-                                  zos.write(outBytes)
-                                  zos.closeEntry()
+                                  zos.putNextEntry(ze); zos.write(outBytes); zos.closeEntry()
                               } else {
-                                  zos.putNextEntry(ZipEntry(name))
-                                  zos.write(outBytes)
-                                  zos.closeEntry()
+                                  zos.putNextEntry(ZipEntry(name)); zos.write(outBytes); zos.closeEntry()
                               }
                           }
                           zis.closeEntry()
                           entry = zis.nextEntry
+                      }
+                  }
+
+                  if (mode == "Offline ZIP" && zipDataUrl.contains(",")) {
+                      val zipBytes = Base64.decode(zipDataUrl.substringAfter(","), Base64.DEFAULT)
+                      val zipEntries = mutableMapOf<String, ByteArray>()
+                      ZipInputStream(ByteArrayInputStream(zipBytes)).use { uz ->
+                          var ze = uz.nextEntry
+                          while (ze != null) {
+                              if (!ze.isDirectory && !ze.name.startsWith("__MACOSX")) zipEntries[ze.name] = uz.readBytes()
+                              uz.closeEntry(); ze = uz.nextEntry
+                          }
+                      }
+                      val idxKey = zipEntries.keys.firstOrNull { it.endsWith("index.html") }
+                      val stripPrefix = if (idxKey != null && idxKey.contains("/")) idxKey.substringBeforeLast("/") + "/" else ""
+                      for ((k, data) in zipEntries) {
+                          val rel = if (stripPrefix.isNotEmpty() && k.startsWith(stripPrefix)) k.removePrefix(stripPrefix) else k
+                          if (rel.isNotEmpty()) {
+                              zos.putNextEntry(ZipEntry("assets/www/$rel"))
+                              zos.write(data)
+                              zos.closeEntry()
+                          }
                       }
                   }
                   zos.close()
@@ -902,51 +957,26 @@ jobs:
                   onProgress(75, "Signing APK with v1 + v2 Digital Signature...")
                   val buildsDir = File(context.getExternalFilesDir(null), "builds").apply { mkdirs() }
                   val cleanName = appName.replace(Regex("[^a-zA-Z0-9]"), "_")
-                  val stamp = System.currentTimeMillis()
-                  val apkFileName = "${cleanName}_v${versionName}_${stamp}.apk"
+                  val apkFileName = "${cleanName}_v${versionName}_${System.currentTimeMillis()}.apk"
                   val signedApk = File(buildsDir, apkFileName)
 
-                  val signerConfig = ApkSigner.SignerConfig.Builder(
-                      "CERT",
-                      keyMaterial.privateKey,
-                      listOf(keyMaterial.certificate)
-                  ).build()
-
-                  val apkSigner = ApkSigner.Builder(listOf(signerConfig))
-                      .setInputApk(unsignedApk)
-                      .setOutputApk(signedApk)
-                      .setV1SigningEnabled(true)
-                      .setV2SigningEnabled(true)
-                      .setV3SigningEnabled(false)
-                      .build()
-                  apkSigner.sign()
+                  val signerConfig = ApkSigner.SignerConfig.Builder("CERT", keyMaterial.privateKey, listOf(keyMaterial.certificate)).build()
+                  ApkSigner.Builder(listOf(signerConfig))
+                      .setInputApk(unsignedApk).setOutputApk(signedApk)
+                      .setV1SigningEnabled(true).setV2SigningEnabled(true).setV3SigningEnabled(false)
+                      .build().sign()
 
                   onProgress(92, "Saving APK & Certificate to Downloads...")
                   copyToPublicDownloads(context, signedApk, apkFileName, "application/vnd.android.package-archive")
-
-                  val certFileName = "${cleanName.lowercase()}_upload_cert.pem"
-                  val certTemp = File(workDir, certFileName).apply { writeText(keyMaterial.certPem) }
-                  copyToPublicDownloads(context, certTemp, certFileName, "application/x-pem-file")
-
+                  val certTemp = File(workDir, "${cleanName.lowercase()}_upload_cert.pem").apply { writeText(keyMaterial.certPem) }
+                  copyToPublicDownloads(context, certTemp, certTemp.name, "application/x-pem-file")
                   workDir.deleteRecursively()
                   onProgress(100, "Build Complete!")
 
                   return JSONObject().apply {
-                      put("success", true)
-                      put("apkFileName", apkFileName)
-                      put("apkPath", signedApk.absolutePath)
-                      put("sizeKb", signedApk.length() / 1024)
-                      put("sha1", keyMaterial.sha1)
-                      put("sha256", keyMaterial.sha256)
-                      put("certPem", keyMaterial.certPem)
-                      put("p12Path", keyMaterial.p12File.absolutePath)
+                      put("success", true); put("apkFileName", apkFileName); put("sizeKb", signedApk.length() / 1024)
+                      put("sha1", keyMaterial.sha1); put("sha256", keyMaterial.sha256)
                   }
-              }
-
-              private fun computeCrc32(data: ByteArray): Long {
-                  val crc = CRC32()
-                  crc.update(data)
-                  return crc.value
               }
 
               fun copyToPublicDownloads(context: Context, srcFile: File, displayName: String, mime: String) {
@@ -957,11 +987,8 @@ jobs:
                               put(MediaStore.Downloads.MIME_TYPE, mime)
                               put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/APMBS_App_Studio")
                           }
-                          val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                          uri?.let {
-                              context.contentResolver.openOutputStream(it)?.use { os ->
-                                  FileInputStream(srcFile).use { ins -> ins.copyTo(os) }
-                              }
+                          context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
+                              context.contentResolver.openOutputStream(uri)?.use { os -> FileInputStream(srcFile).use { it.copyTo(os) } }
                           }
                       } else {
                           val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "APMBS_App_Studio").apply { mkdirs() }
@@ -971,8 +998,7 @@ jobs:
               }
           }
           KOTLINEOF
-
-          cat << 'KOTLINEOF' > studio/app/src/main/java/com/apmbs/appstudio/MainActivity.kt
+                    cat << 'KOTLINEOF' > studio/app/src/main/java/com/apmbs/appstudio/MainActivity.kt
           package com.apmbs.appstudio
 
           import android.annotation.SuppressLint
@@ -999,28 +1025,19 @@ jobs:
                   super.onCreate(savedInstanceState)
                   webView = WebView(this)
                   setContentView(webView)
-
                   webView.settings.apply {
-                      javaScriptEnabled = true
-                      domStorageEnabled = true
-                      databaseEnabled = true
-                      allowFileAccess = true
-                      allowContentAccess = true
+                      javaScriptEnabled = true; domStorageEnabled = true; databaseEnabled = true
+                      allowFileAccess = true; allowContentAccess = true
                   }
-
                   webView.addJavascriptInterface(StudioNativeBridge(), "StudioNative")
                   webView.webChromeClient = object : WebChromeClient() {
                       override fun onShowFileChooser(wv: WebView?, cb: ValueCallback<Array<Uri>>?, params: FileChooserParams?): Boolean {
                           fileCallback = cb
-                          val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                              addCategory(Intent.CATEGORY_OPENABLE)
-                              type = "*/*"
-                          }
+                          val intent = Intent(Intent.ACTION_GET_CONTENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }
                           startActivityForResult(Intent.createChooser(intent, "Choose File"), 2001)
                           return true
                       }
                   }
-
                   webView.loadUrl("file:///android_asset/studio.html")
               }
 
@@ -1028,41 +1045,35 @@ jobs:
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
                   if (requestCode == 2001) {
-                      val res = if (resultCode == RESULT_OK && data?.data != null) arrayOf(data.data!!) else null
-                      fileCallback?.onReceiveValue(res)
+                      fileCallback?.onReceiveValue(if (resultCode == RESULT_OK && data?.data != null) arrayOf(data.data!!) else null)
                       fileCallback = null
                   }
               }
 
-              override fun onDestroy() {
-                  super.onDestroy()
-                  scope.cancel()
-              }
+              override fun onDestroy() { super.onDestroy(); scope.cancel() }
 
               inner class StudioNativeBridge {
                   @JavascriptInterface
                   fun buildOfflineApk(configJson: String, finalHtml: String) {
                       scope.launch(Dispatchers.IO) {
                           try {
-                              val res = OfflineApkBuilder.buildSignedApk(
-                                  this@MainActivity,
-                                  configJson,
-                                  finalHtml
-                              ) { pct, msg ->
-                                  runOnUiThread {
-                                      val safeMsg = JSONObject.quote(msg)
-                                      webView.evaluateJavascript("window.onNativeBuildProgress && window.onNativeBuildProgress($pct, $safeMsg);", null)
-                                  }
+                              val res = OfflineApkBuilder.buildSignedApk(this@MainActivity, configJson, finalHtml) { pct, msg ->
+                                  runOnUiThread { webView.evaluateJavascript("window.onNativeBuildProgress && window.onNativeBuildProgress($pct,${JSONObject.quote(msg)});", null) }
                               }
-                              runOnUiThread {
-                                  webView.evaluateJavascript("window.onNativeBuildComplete && window.onNativeBuildComplete(${res});", null)
-                              }
+                              runOnUiThread { webView.evaluateJavascript("window.onNativeBuildComplete && window.onNativeBuildComplete($res);", null) }
                           } catch (e: Exception) {
-                              val err = JSONObject.quote(e.message ?: "Build failed")
-                              runOnUiThread {
-                                  webView.evaluateJavascript("window.onNativeBuildError && window.onNativeBuildError($err);", null)
-                              }
+                              runOnUiThread { webView.evaluateJavascript("window.onNativeBuildError && window.onNativeBuildError(${JSONObject.quote(e.message ?: "Build failed")});", null) }
                           }
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun importKeystoreP12(packageNameStr: String, p12Base64: String, passwordStr: String, aliasStr: String): String {
+                      return try {
+                          val importedAlias = KeystoreManager.importCustomKeystore(this@MainActivity, packageNameStr, p12Base64, passwordStr, aliasStr)
+                          JSONObject().apply { put("ok", true); put("alias", importedAlias) }.toString()
+                      } catch (e: Exception) {
+                          JSONObject().apply { put("ok", false); put("error", e.message ?: "Invalid .p12") }.toString()
                       }
                   }
 
@@ -1071,51 +1082,34 @@ jobs:
                       runOnUiThread {
                           try {
                               if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-                                  Toast.makeText(this@MainActivity, "Please allow 'Install unknown apps' for APMBS App Studio", Toast.LENGTH_LONG).show()
+                                  Toast.makeText(this@MainActivity, "Allow 'Install unknown apps' first", Toast.LENGTH_LONG).show()
                                   startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                                   return@runOnUiThread
                               }
                               val file = File(File(getExternalFilesDir(null), "builds"), apkFileName)
-                              if (!file.exists()) {
-                                  Toast.makeText(this@MainActivity, "APK file not found", Toast.LENGTH_SHORT).show()
-                                  return@runOnUiThread
-                              }
                               val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
                               val intent = Intent(Intent.ACTION_VIEW).apply {
                                   setDataAndType(uri, "application/vnd.android.package-archive")
                                   addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                               }
                               startActivity(intent)
-                          } catch (e: Exception) {
-                              Toast.makeText(this@MainActivity, "Install error: ${e.message}", Toast.LENGTH_LONG).show()
-                          }
+                          } catch (e: Exception) { Toast.makeText(this@MainActivity, "Install error: ${e.message}", Toast.LENGTH_LONG).show() }
                       }
                   }
 
                   @JavascriptInterface
                   fun shareApkFile(apkFileName: String, targetApp: String) {
                       runOnUiThread {
-                          try {
-                              val file = File(File(getExternalFilesDir(null), "builds"), apkFileName)
-                              if (!file.exists()) return@runOnUiThread
-                              val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
-                              val intent = Intent(Intent.ACTION_SEND).apply {
-                                  type = "application/vnd.android.package-archive"
-                                  putExtra(Intent.EXTRA_STREAM, uri)
-                                  addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                  if (targetApp == "wa") setPackage("com.whatsapp")
-                                  if (targetApp == "tg") setPackage("org.telegram.messenger")
-                              }
-                              startActivity(Intent.createChooser(intent, "Share APK"))
-                          } catch (e: Exception) {
-                              val fallback = Intent(Intent.ACTION_SEND).apply {
-                                  val file = File(File(getExternalFilesDir(null), "builds"), apkFileName)
-                                  val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
-                                  type = "application/vnd.android.package-archive"
-                                  putExtra(Intent.EXTRA_STREAM, uri)
-                                  addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                              }
-                              startActivity(Intent.createChooser(fallback, "Share APK"))
+                          val file = File(File(getExternalFilesDir(null), "builds"), apkFileName)
+                          val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
+                          val intent = Intent(Intent.ACTION_SEND).apply {
+                              type = "application/vnd.android.package-archive"
+                              putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                              if (targetApp == "wa") setPackage("com.whatsapp")
+                              if (targetApp == "tg") setPackage("org.telegram.messenger")
+                          }
+                          try { startActivity(Intent.createChooser(intent, "Share APK")) } catch (_: Exception) {
+                              intent.setPackage(null); startActivity(Intent.createChooser(intent, "Share APK"))
                           }
                       }
                   }
@@ -1128,93 +1122,89 @@ jobs:
                               val outName = "${appNameStr.replace(Regex("[^a-zA-Z0-9]"), "_")}_signing_key.p12"
                               OfflineApkBuilder.copyToPublicDownloads(this@MainActivity, km.p12File, outName, "application/x-pkcs12")
                               Toast.makeText(this@MainActivity, "Saved to Downloads/APMBS_App_Studio/$outName", Toast.LENGTH_LONG).show()
-                          } catch (e: Exception) {
-                              Toast.makeText(this@MainActivity, "Export error: ${e.message}", Toast.LENGTH_SHORT).show()
-                          }
+                          } catch (e: Exception) { Toast.makeText(this@MainActivity, "Export error: ${e.message}", Toast.LENGTH_SHORT).show() }
                       }
                   }
               }
           }
           KOTLINEOF
-                    cat << 'HTMLEOF' > studio/app/src/main/assets/studio.html
+                cat << 'HTMLEOF' > studio/app/src/main/assets/studio.html
           <!DOCTYPE html>
           <html lang="hi">
           <head>
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <title>APMBS App Studio</title>
+            <title>APMBS App Studio v2.0</title>
             <style>
-              :root {
-                --bg-main: #0D0E12; --bg-card: #161821; --bg-input: #1E212D; --bg-elevated: #252836;
-                --border: #2C3042; --primary: #6366F1; --primary-soft: rgba(99, 102, 241, 0.16);
-                --text-main: #F3F4F6; --text-muted: #9CA3AF; --success: #10B981;
-              }
-              * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; -webkit-tap-highlight-color: transparent; }
-              body { background: var(--bg-main); color: var(--text-main); min-height: 100vh; padding-bottom: 84px; }
-              .top-bar { position: sticky; top: 0; z-index: 50; background: #0D0E12; border-bottom: 1px solid var(--border); padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-              .top-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-              .icon-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); width: 36px; height: 36px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; }
-              .app-header-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-              .pill-badge { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); padding: 6px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
-              .pill-badge.accent { background: var(--primary-soft); border-color: var(--primary); color: #A5B4FC; }
-              .stepper { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; position: relative; }
-              .step-item { display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 2; cursor: pointer; flex: 1; }
-              .step-circle { width: 32px; height: 32px; border-radius: 50%; background: var(--bg-input); border: 2px solid var(--border); color: var(--text-muted); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-              .step-item.active .step-circle, .step-item.done .step-circle { background: var(--primary); border-color: #818CF8; color: #fff; }
-              .step-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
-              .step-item.active .step-label { color: #A5B4FC; }
-              .stepper-line { position: absolute; top: 30px; left: 12%; right: 12%; height: 2px; background: var(--border); z-index: 1; }
-              .container { max-width: 680px; margin: 0 auto; padding: 8px 14px; }
-              .section-title { font-size: 17px; font-weight: 700; margin: 10px 0 12px; display: flex; align-items: center; gap: 8px; }
-              .section-title::before { content: ""; width: 4px; height: 18px; background: var(--primary); border-radius: 4px; }
-              .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
-              .field-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-              .field-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
-              .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-              .mode-box { background: var(--bg-input); border: 1.5px solid var(--border); border-radius: 12px; padding: 12px 6px; text-align: center; cursor: pointer; }
-              .mode-box.active { background: var(--primary-soft); border-color: var(--primary); }
-              input[type="text"], input[type="number"], select, textarea { width: 100%; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); border-radius: 10px; padding: 11px 12px; font-size: 14px; outline: none; }
-              textarea.code-editor { font-family: monospace; font-size: 12.5px; min-height: 140px; }
-              .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-              .btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main); padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 1; }
-              .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-              .btn-success { background: rgba(16, 185, 129, 0.18); border-color: var(--success); color: #6EE7B7; }
-              .btn-outline-primary { background: var(--primary-soft); border-color: var(--primary); color: #A5B4FC; }
-              .app-icon-circle { width: 76px; height: 76px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary); }
-              .seg-group { display: flex; background: var(--bg-input); border-radius: 10px; padding: 3px; border: 1px solid var(--border); margin-bottom: 10px; }
-              .seg-btn { flex: 1; padding: 8px 6px; text-align: center; font-size: 12.5px; font-weight: 600; border-radius: 8px; cursor: pointer; color: var(--text-muted); }
-              .seg-btn.active { background: var(--primary); color: #fff; }
-              .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid rgba(44, 48, 66, 0.5); gap: 12px; }
-              .toggle-row:last-child { border-bottom: none; }
-              .switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
-              .switch input { opacity: 0; width: 0; height: 0; }
-              .slider { position: absolute; cursor: pointer; inset: 0; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 24px; transition: 0.2s; }
-              .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 2px; bottom: 2px; background: #9CA3AF; border-radius: 50%; transition: 0.2s; }
-              input:checked + .slider { background: var(--primary); border-color: var(--primary); }
-              input:checked + .slider:before { transform: translateX(20px); background: #fff; }
-              .perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-              .perm-item { background: var(--bg-input); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-              .perm-item.checked { background: var(--primary-soft); border-color: var(--primary); color: #fff; }
-              .perm-item.full { grid-column: span 2; }
-              .bottom-footer { position: fixed; bottom: 0; left: 0; right: 0; background: #0D0E12; border-top: 1px solid var(--border); padding: 12px 16px; display: flex; gap: 12px; z-index: 45; }
-              .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; display: none; align-items: center; justify-content: center; padding: 16px; }
-              .modal-backdrop.open { display: flex; }
-              .modal-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 18px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 18px; }
-              .progress-track { width: 100%; height: 8px; background: var(--bg-input); border-radius: 8px; overflow: hidden; margin: 14px 0 8px; }
-              .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #6366F1, #A855F7); transition: width 0.3s; }
-              .sig-box { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin: 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-              .sig-hash { font-family: monospace; font-size: 11px; color: #D1D5DB; word-break: break-all; }
-              .dl-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 12px; margin-bottom: 10px; }
-              .hidden { display: none !important; }
-              .toast { position: fixed; top: 66px; left: 50%; transform: translateX(-50%); background: #1F2937; border: 1px solid var(--primary); color: #fff; padding: 9px 16px; border-radius: 24px; font-size: 12.5px; font-weight: 600; z-index: 200; display: none; }
+              :root { --bg-main:#0D0E12; --bg-card:#161821; --bg-input:#1E212D; --bg-elevated:#252836; --border:#2C3042; --primary:#6366F1; --primary-soft:rgba(99,102,241,0.16); --text-main:#F3F4F6; --text-muted:#9CA3AF; --success:#10B981; }
+              * { box-sizing:border-box; margin:0; padding:0; font-family:sans-serif; -webkit-tap-highlight-color:transparent; }
+              body { background:var(--bg-main); color:var(--text-main); min-height:100vh; padding-bottom:84px; }
+              .top-bar { position:sticky; top:0; z-index:50; background:#0D0E12; border-bottom:1px solid var(--border); padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+              .top-left { display:flex; align-items:center; gap:8px; min-width:0; }
+              .icon-btn { background:var(--bg-input); border:1px solid var(--border); color:var(--text-main); width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:16px; }
+              .app-header-title { font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+              .pill-badge { background:var(--bg-input); border:1px solid var(--border); color:var(--text-main); padding:6px 10px; border-radius:20px; font-size:12px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+              .pill-badge.accent { background:var(--primary-soft); border-color:var(--primary); color:#A5B4FC; }
+              .stepper { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; position:relative; }
+              .step-item { display:flex; flex-direction:column; align-items:center; gap:6px; z-index:2; cursor:pointer; flex:1; }
+              .step-circle { width:32px; height:32px; border-radius:50%; background:var(--bg-input); border:2px solid var(--border); color:var(--text-muted); font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+              .step-item.active .step-circle, .step-item.done .step-circle { background:var(--primary); border-color:#818CF8; color:#fff; }
+              .step-label { font-size:11px; color:var(--text-muted); font-weight:600; }
+              .step-item.active .step-label { color:#A5B4FC; }
+              .stepper-line { position:absolute; top:30px; left:12%; right:12%; height:2px; background:var(--border); z-index:1; }
+              .container { max-width:680px; margin:0 auto; padding:8px 14px; }
+              .section-title { font-size:17px; font-weight:700; margin:10px 0 12px; display:flex; align-items:center; gap:8px; }
+              .section-title::before { content:""; width:4px; height:18px; background:var(--primary); border-radius:4px; }
+              .card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:14px; }
+              .field-label { display:block; font-size:13px; font-weight:600; margin-bottom:8px; }
+              .field-hint { font-size:11.5px; color:var(--text-muted); margin-top:4px; line-height:1.4; }
+              .mode-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px; }
+              .mode-box { background:var(--bg-input); border:1.5px solid var(--border); border-radius:12px; padding:12px 6px; text-align:center; cursor:pointer; }
+              .mode-box.active { background:var(--primary-soft); border-color:var(--primary); }
+              input[type="text"], input[type="password"], select, textarea { width:100%; background:var(--bg-input); border:1px solid var(--border); color:var(--text-main); border-radius:10px; padding:11px 12px; font-size:14px; outline:none; }
+              textarea.code-editor { font-family:monospace; font-size:12.5px; min-height:135px; }
+              .btn-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+              .btn { background:var(--bg-input); border:1px solid var(--border); color:var(--text-main); padding:10px 14px; border-radius:10px; font-size:13px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; flex:1; }
+              .btn-primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+              .btn-success { background:rgba(16,185,129,0.18); border-color:var(--success); color:#6EE7B7; }
+              .btn-outline-primary { background:var(--primary-soft); border-color:var(--primary); color:#A5B4FC; }
+              .app-icon-circle { width:80px; height:80px; border-radius:50%; object-fit:cover; border:2px solid var(--primary); }
+              .seg-group { display:flex; background:var(--bg-input); border-radius:10px; padding:3px; border:1px solid var(--border); margin-bottom:10px; }
+              .seg-btn { flex:1; padding:8px 6px; text-align:center; font-size:12.5px; font-weight:600; border-radius:8px; cursor:pointer; color:var(--text-muted); }
+              .seg-btn.active { background:var(--primary); color:#fff; }
+              .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:11px 0; border-bottom:1px solid rgba(44,48,66,0.5); gap:12px; }
+              .toggle-row:last-child { border-bottom:none; }
+              .switch { position:relative; width:44px; height:24px; flex-shrink:0; }
+              .switch input { opacity:0; width:0; height:0; }
+              .slider { position:absolute; cursor:pointer; inset:0; background:var(--bg-elevated); border:1px solid var(--border); border-radius:24px; transition:0.2s; }
+              .slider:before { position:absolute; content:""; height:18px; width:18px; left:2px; bottom:2px; background:#9CA3AF; border-radius:50%; transition:0.2s; }
+              input:checked + .slider { background:var(--primary); border-color:var(--primary); }
+              input:checked + .slider:before { transform:translateX(20px); background:#fff; }
+              .perm-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+              .perm-item { background:var(--bg-input); border:1.5px solid var(--border); border-radius:10px; padding:10px; font-size:12.5px; font-weight:600; cursor:pointer; }
+              .perm-item.checked { background:var(--primary-soft); border-color:var(--primary); color:#fff; }
+              .perm-item.full { grid-column:span 2; }
+              .bottom-footer { position:fixed; bottom:0; left:0; right:0; background:#0D0E12; border-top:1px solid var(--border); padding:12px 16px; display:flex; gap:12px; z-index:45; }
+              .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:100; display:none; align-items:center; justify-content:center; padding:16px; }
+              .modal-backdrop.open { display:flex; }
+              .modal-box { background:var(--bg-card); border:1px solid var(--border); border-radius:18px; width:100%; max-width:520px; max-height:90vh; overflow-y:auto; padding:18px; }
+              .progress-track { width:100%; height:8px; background:var(--bg-input); border-radius:8px; overflow:hidden; margin:14px 0 8px; }
+              .progress-fill { height:100%; width:0%; background:linear-gradient(90deg,#6366F1,#A855F7); transition:width 0.3s; }
+              .sig-box { background:var(--bg-input); border:1px solid var(--border); border-radius:10px; padding:10px; margin:8px 0; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+              .sig-hash { font-family:monospace; font-size:11px; color:#D1D5DB; word-break:break-all; }
+              .dl-card { background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:12px; margin-bottom:10px; }
+              .hidden { display:none !important; }
+              .toast { position:fixed; top:66px; left:50%; transform:translateX(-50%); background:#1F2937; border:1px solid var(--primary); color:#fff; padding:9px 16px; border-radius:24px; font-size:12.5px; font-weight:600; z-index:200; display:none; }
             </style>
           </head>
+          HTMLEOF
+                    cat << 'HTMLEOF' >> studio/app/src/main/assets/studio.html
           <body>
             <div id="toast" class="toast"></div>
             <header class="top-bar">
               <div class="top-left">
                 <button class="icon-btn" onclick="openProjectsModal()">☰</button>
-                <div class="app-header-title" id="headerTitle">APMBS App Studio</div>
+                <div class="app-header-title" id="headerTitle">APMBS vaidik kundli pro</div>
               </div>
               <div style="display:flex;align-items:center;gap:6px;">
                 <button class="icon-btn" onclick="openLivePreview()">▶</button>
@@ -1235,7 +1225,7 @@ jobs:
 
               <div class="container">
                 <div id="step1">
-                  <div class="section-title">Your app (100% Offline Engine)</div>
+                  <div class="section-title">Your app (v2.0 Offline Engine)</div>
                   <div class="card">
                     <label class="field-label">Converter Mode *</label>
                     <div class="mode-grid">
@@ -1246,6 +1236,11 @@ jobs:
                     <div id="websiteInputWrap" class="hidden" style="margin-bottom:12px;">
                       <label class="field-label">Website URL *</label>
                       <input type="text" id="websiteUrl" placeholder="https://example.com" oninput="syncState()" />
+                    </div>
+                    <div id="zipInputWrap" class="hidden" style="margin-bottom:12px;">
+                      <label class="field-label">Upload Offline Website ZIP (.zip) *</label>
+                      <label class="btn btn-outline-primary" style="width:100%;cursor:pointer;">📦 Choose .ZIP Bundle (with index.html)<input type="file" accept=".zip" style="display:none;" onchange="handleZipUpload(event)" /></label>
+                      <div id="zipStatus" style="font-size:12px;color:var(--success);margin-top:8px;font-weight:600;">No ZIP selected yet</div>
                     </div>
                     <div id="htmlInputWrap">
                       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -1269,9 +1264,13 @@ jobs:
                   <div class="section-title">App Icon</div>
                   <div class="card" style="text-align:center;">
                     <img id="appIconPreview" class="app-icon-circle" alt="Icon" />
+                    <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;">
+                      <span style="font-size:12px;color:var(--text-muted);">Icon Background Color:</span>
+                      <input type="color" id="iconBgColor" value="#4F46E5" style="width:44px;height:30px;border:none;" onchange="onIconColorChange()" />
+                    </div>
                     <div class="btn-row" style="justify-content:center;">
-                      <label class="btn btn-primary" style="max-width:200px;cursor:pointer;">CHOOSE IMAGE<input type="file" accept="image/*" style="display:none;" onchange="handleIconUpload(event)" /></label>
-                      <button class="btn" style="max-width:160px;" onclick="resetAutoIcon()">Auto Generate</button>
+                      <label class="btn btn-primary" style="max-width:190px;cursor:pointer;">CHOOSE IMAGE<input type="file" accept="image/*" style="display:none;" onchange="handleIconUpload(event)" /></label>
+                      <button class="btn" style="max-width:150px;" onclick="resetAutoIcon()">Auto Generate</button>
                     </div>
                   </div>
 
@@ -1285,7 +1284,7 @@ jobs:
                     <div style="margin-top:12px;">
                       <label class="field-label">Version *</label>
                       <div style="display:flex;gap:8px;">
-                        <input type="text" id="appVersion" value="1.0.6" oninput="syncState()" />
+                        <input type="text" id="appVersion" value="2.0.0" oninput="syncState()" />
                         <button class="btn" style="flex:0 0 auto;" onclick="bumpVersion()">+0.0.1</button>
                       </div>
                     </div>
@@ -1295,15 +1294,26 @@ jobs:
                 <div id="step2" class="hidden">
                   <div class="section-title">How it looks</div>
                   <div class="card">
-                    <div class="toggle-row">
-                      <div><b>Enable Splash Screen</b></div>
-                      <label class="switch"><input type="checkbox" id="enableSplash" checked onchange="syncState()"><span class="slider"></span></label>
-                    </div>
+                    <div class="toggle-row"><div><b>Enable Splash Screen</b></div><label class="switch"><input type="checkbox" id="enableSplash" checked onchange="syncState()"><span class="slider"></span></label></div>
                     <div style="display:flex;gap:10px;margin-top:10px;">
-                      <div style="flex:1;"><label class="field-label">Splash BG</label><input type="color" id="splashBgColor" value="#0D0E12" style="height:40px;" onchange="syncState()" /></div>
-                      <div style="flex:1;"><label class="field-label">Splash Text</label><input type="color" id="splashTextColor" value="#FFFFFF" style="height:40px;" onchange="syncState()" /></div>
+                      <div style="flex:1;"><label class="field-label">Splash BG</label><input type="color" id="splashBgColor" value="#0D0E12" style="height:38px;" onchange="syncState()" /></div>
+                      <div style="flex:1;"><label class="field-label">Splash Text</label><input type="color" id="splashTextColor" value="#FFFFFF" style="height:38px;" onchange="syncState()" /></div>
+                      <div style="flex:1;"><label class="field-label">Duration</label><select id="splashDuration" onchange="syncState()"><option value="1.0">1 sec</option><option value="1.5" selected>1.5 sec</option><option value="2.5">2.5 sec</option><option value="4.0">4 sec</option></select></div>
                     </div>
-                    <div style="margin-top:12px;">
+                    <div class="btn-row">
+                      <label class="btn" style="cursor:pointer;">🖼️ Custom Splash Image<input type="file" accept="image/*" style="display:none;" onchange="handleSplashUpload(event)" /></label>
+                      <button class="btn" style="flex:0 0 auto;" onclick="clearSplashImage()">Reset</button>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+                      <div style="flex:1;"><label class="field-label">Status Bar Color</label><input type="color" id="statusBarColor" value="#0D0E12" style="height:38px;" onchange="syncState()" /></div>
+                      <div style="flex:1;"><label class="field-label">Progress Bar Color</label><input type="color" id="progressBarColor" value="#6366F1" style="height:38px;" onchange="syncState()" /></div>
+                    </div>
+                    <div class="toggle-row"><div><b>Light Status Bar Icons (Dark text)</b></div><label class="switch"><input type="checkbox" id="lightStatusBar" onchange="syncState()"><span class="slider"></span></label></div>
+                    <div class="toggle-row"><div><b>Show Top Loading Progress Bar</b></div><label class="switch"><input type="checkbox" id="showProgressBar" checked onchange="syncState()"><span class="slider"></span></label></div>
+                    <div style="margin-top:10px;">
                       <label class="field-label">Screen Orientation</label>
                       <div class="seg-group">
                         <div class="seg-btn active" onclick="setSeg('orientation','Portrait',this)">Portrait</div>
@@ -1316,18 +1326,23 @@ jobs:
                     <div class="toggle-row"><div><b>Enable WebView Zoom</b></div><label class="switch"><input type="checkbox" id="enableZoom" checked onchange="syncState()"><span class="slider"></span></label></div>
                   </div>
                 </div>
-
+          HTMLEOF
+                    cat << 'HTMLEOF' >> studio/app/src/main/assets/studio.html
                 <div id="step3" class="hidden">
                   <div class="section-title">Features & Security</div>
                   <div class="card">
-                    <div class="toggle-row"><div><b>Copy Protection</b></div><label class="switch"><input type="checkbox" id="copyProtection" checked onchange="syncState()"><span class="slider"></span></label></div>
-                    <div style="margin-top:10px;"><label class="field-label">App PIN Lock (4 digits, optional)</label><input type="text" id="appPinLock" maxlength="4" placeholder="Leave empty for no PIN" oninput="syncState()" /></div>
-                    <div style="margin-top:10px;"><label class="field-label">What's New Message (optional)</label><input type="text" id="whatsNewMsg" placeholder="e.g., Added D60 PDF report!" oninput="syncState()" /></div>
+                    <div class="toggle-row"><div><b>Copy Protection</b><div class="field-hint">Blocks text selection & copying</div></div><label class="switch"><input type="checkbox" id="copyProtection" checked onchange="syncState()"><span class="slider"></span></label></div>
+                    <div class="toggle-row"><div><b>Block Screenshots & Screen Recording</b><div class="field-hint">Enables Android FLAG_SECURE protection</div></div><label class="switch"><input type="checkbox" id="blockScreenshots" onchange="syncState()"><span class="slider"></span></label></div>
+                    <div class="toggle-row"><div><b>Keep Screen On</b><div class="field-hint">Prevents display sleep while reading charts</div></div><label class="switch"><input type="checkbox" id="keepScreenOn" checked onchange="syncState()"><span class="slider"></span></label></div>
+                    <div class="toggle-row"><div><b>Exit Confirmation Dialog</b><div class="field-hint">Asks confirmation before closing app</div></div><label class="switch"><input type="checkbox" id="confirmExit" checked onchange="syncState()"><span class="slider"></span></label></div>
+                    <div class="toggle-row"><div><b>Pull-to-Refresh (Website Mode)</b></div><label class="switch"><input type="checkbox" id="pullToRefresh" onchange="syncState()"><span class="slider"></span></label></div>
+                    <div style="margin-top:10px;"><label class="field-label">App Launch PIN Lock (4 digits, optional)</label><input type="text" id="appPinLock" maxlength="4" placeholder="Leave empty for no PIN" oninput="syncState()" /></div>
+                    <div style="margin-top:10px;"><label class="field-label">What's New Popup Message (optional)</label><input type="text" id="whatsNewMsg" placeholder="e.g., Added D60 Shodashvarga PDF export!" oninput="syncState()" /></div>
                   </div>
                 </div>
 
                 <div id="step4" class="hidden">
-                  <div class="section-title">App Permissions</div>
+                  <div class="section-title">App Permissions (10 Native Controls)</div>
                   <div class="card">
                     <div class="perm-grid">
                       <div class="perm-item checked" data-perm="STORAGE" onclick="togglePerm(this)">☑️ Storage</div>
@@ -1335,7 +1350,11 @@ jobs:
                       <div class="perm-item" data-perm="BIOMETRIC" onclick="togglePerm(this)">⬜ Fingerprint</div>
                       <div class="perm-item" data-perm="VIBRATE" onclick="togglePerm(this)">⬜ Vibrate</div>
                       <div class="perm-item" data-perm="CAMERA" onclick="togglePerm(this)">⬜ Camera</div>
+                      <div class="perm-item" data-perm="MIC" onclick="togglePerm(this)">⬜ Microphone</div>
                       <div class="perm-item" data-perm="LOCATION" onclick="togglePerm(this)">⬜ Location</div>
+                      <div class="perm-item" data-perm="NOTIFICATIONS" onclick="togglePerm(this)">⬜ Notifications</div>
+                      <div class="perm-item" data-perm="CONTACTS" onclick="togglePerm(this)">⬜ Contacts / Phone</div>
+                      <div class="perm-item" data-perm="BLUETOOTH" onclick="togglePerm(this)">⬜ Bluetooth</div>
                     </div>
                   </div>
                 </div>
@@ -1344,12 +1363,16 @@ jobs:
                   <div class="section-title">Ready to build (100% Offline)</div>
                   <div class="card">
                     <div style="font-size:18px;font-weight:700;" id="summaryAppName">APMBS vaidik kundli pro</div>
-                    <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:8px;" id="summarySub">HTML • version 1.0.6</div>
+                    <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:8px;" id="summarySub">HTML • version 2.0.0</div>
                     <div class="field-hint">Package: <b id="summaryPkg">com.apmbs.vaidikkundlipro</b></div>
                   </div>
+                  <div class="section-title">Signing Key (.p12)</div>
                   <div class="card">
-                    <div class="perm-item checked full">🔘 Unique RSA-2048 Offline Signing Key</div>
-                    <div class="btn-row"><button class="btn" onclick="backupSigningKey()">🔑 Save backup of my key (.p12)</button></div>
+                    <div class="perm-item checked full" id="keyStatusBanner">🔘 Unique RSA-2048 Offline Signing Key</div>
+                    <div class="btn-row">
+                      <button class="btn" onclick="backupSigningKey()">🔑 Save Backup (.p12)</button>
+                      <button class="btn btn-outline-primary" onclick="openImportKeyModal()">📥 Import Existing .p12</button>
+                    </div>
                   </div>
                   <button class="btn btn-primary" style="width:100%;padding:14px;font-size:15px;" onclick="startOfflineApkBuild()">🚀 Generate Real APK (Offline)</button>
                 </div>
@@ -1359,7 +1382,7 @@ jobs:
                 <button class="btn" id="prevBtn" onclick="prevStep()">Back</button>
                 <button class="btn btn-primary" id="nextBtn" onclick="nextStep()">Continue</button>
               </div>
-               </div>
+            </div>
 
             <div id="downloadsView" class="hidden">
               <div class="container">
@@ -1370,6 +1393,17 @@ jobs:
                 <div id="downloadsListContainer"></div>
               </div>
             </div>
+
+            <div id="importKeyModal" class="modal-backdrop"><div class="modal-box">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>📥 Import Existing .p12 Keystore</b><button class="icon-btn" onclick="closeModal('importKeyModal')">✕</button></div>
+              <label class="field-label">Select .p12 / .pfx Keystore File *</label>
+              <input type="file" id="p12FileInput" accept=".p12,.pfx" style="margin-bottom:10px;" />
+              <label class="field-label">Keystore Password *</label>
+              <input type="password" id="p12PasswordInput" placeholder="Enter keystore password" style="margin-bottom:10px;" />
+              <label class="field-label">Key Alias (optional)</label>
+              <input type="text" id="p12AliasInput" placeholder="Leave blank to auto-detect" style="margin-bottom:12px;" />
+              <button class="btn btn-primary" style="width:100%;" onclick="submitImportKeystore()">✅ Import & Link Keystore</button>
+            </div></div>
 
             <div id="buildProgressModal" class="modal-backdrop"><div class="modal-box">
               <div style="font-size:18px;font-weight:700;">🚀 Generating Real Signed APK</div>
@@ -1395,7 +1429,7 @@ jobs:
             </div></div>
 
             <div id="templatesModal" class="modal-backdrop"><div class="modal-box">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>📂 Templates</b><button class="icon-btn" onclick="closeModal('templatesModal')">✕</button></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>📂 Ready-Made Templates</b><button class="icon-btn" onclick="closeModal('templatesModal')">✕</button></div>
               <div id="templatesList"></div>
               <label class="btn btn-outline-primary" style="width:100%;margin-top:10px;cursor:pointer;">➕ Import Template (.html/.json)<input type="file" accept=".html,.htm,.json" style="display:none;" onchange="importNewTemplate(event)" /></label>
             </div></div>
@@ -1410,20 +1444,23 @@ jobs:
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b>📱 Live Preview</b><button class="icon-btn" onclick="closeModal('previewModal')">✕</button></div>
               <iframe id="previewIframe" style="width:100%;height:480px;border:2px solid var(--border);border-radius:16px;background:#fff;"></iframe>
             </div></div>
-
+          HTMLEOF
+                    cat << 'HTMLEOF' >> studio/app/src/main/assets/studio.html
           <script>
             const DEFAULT_TEMPLATES = [
-              { id: "tpl_astro", name: "वैदिक ज्योतिष एवं कुंडली (Astrology + PDF)", desc: "जन्म विवरण और PDF प्रिंट", code: `<!DOCTYPE html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;background:#120d1d;color:#fff;padding:16px}.card{background:#1e1633;padding:16px;border-radius:14px}input,button{width:100%;padding:11px;margin-top:8px;border-radius:8px;border:1px solid #4c3b7a;background:#120d1d;color:#fff;box-sizing:border-box}button{background:#d97706;border:none;font-weight:bold}</style></head><body><div class="card"><h2 style="color:#fbbf24">🕉️ APMBS वैदिक कुंडली</h2><input id="n" placeholder="जातक का नाम"><input id="d" type="date"><input id="t" type="time"><input id="p" placeholder="जन्म स्थान"><button onclick="show()">कुंडली देखें</button><div id="o" style="margin-top:12px"></div></div><script>function show(){o.innerHTML='<b>नाम:</b> '+n.value+'<br><b>तारीख:</b> '+d.value+' '+t.value+'<br><b>स्थान:</b> '+p.value+'<br><button onclick="window.print()" style="background:#10b981;margin-top:8px">PDF प्रिंट करें</button>';}<\/script></body></html>` },
+              { id: "tpl_astro", name: "वैदिक ज्योतिष एवं कुंडली (Astrology + PDF)", desc: "जन्म विवरण, लोकल स्टोरेज और PDF प्रिंट", code: `<!DOCTYPE html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;background:#120d1d;color:#fff;padding:16px}.card{background:#1e1633;padding:16px;border-radius:14px}input,button{width:100%;padding:11px;margin-top:8px;border-radius:8px;border:1px solid #4c3b7a;background:#120d1d;color:#fff;box-sizing:border-box}button{background:#d97706;border:none;font-weight:bold}</style></head><body><div class="card"><h2 style="color:#fbbf24">🕉️ APMBS वैदिक कुंडली प्रो</h2><input id="n" placeholder="जातक का नाम"><input id="d" type="date"><input id="t" type="time"><input id="p" placeholder="जन्म स्थान"><button onclick="show()">कुंडली देखें</button><div id="o" style="margin-top:12px"></div></div><script>function show(){o.innerHTML='<b>नाम:</b> '+n.value+'<br><b>तारीख:</b> '+d.value+' '+t.value+'<br><b>स्थान:</b> '+p.value+'<br><button onclick="window.print()" style="background:#10b981;margin-top:8px">PDF प्रिंट करें</button>';}<\/script></body></html>` },
               { id: "tpl_ebook", name: "ई-बुक एवं ग्रंथ रीडर (E-Book)", desc: "फ़ॉन्ट साइज़ और डार्क/लाइट थीम", code: `<!DOCTYPE html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Georgia,serif;background:#fbf7f0;color:#2c221e;padding:18px;line-height:1.8}.dark{background:#121316;color:#eee}button{padding:8px 14px;margin-right:6px}</style></head><body><button onclick="s+=2;t.style.fontSize=s+'px'">A+</button><button onclick="s-=2;t.style.fontSize=s+'px'">A-</button><button onclick="document.body.classList.toggle('dark')">थीम</button><h2>अध्याय १</h2><p id="t" style="font-size:18px">यहाँ अपना पाठ लिखें।</p><script>let s=18;<\/script></body></html>` },
               { id: "tpl_biz", name: "बिज़नेस एवं परामर्श ऐप", desc: "WhatsApp संपर्क और सेवाएं", code: `<!DOCTYPE html><html lang="hi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;background:#0f172a;color:#fff;padding:16px}.card{background:#1e293b;padding:16px;border-radius:14px}a{display:block;text-align:center;background:#25D366;color:#fff;padding:12px;border-radius:10px;text-decoration:none;font-weight:bold;margin-top:12px}</style></head><body><div class="card"><h2>🌟 परामर्श केंद्र</h2><a href="https://wa.me/?text=नमस्ते">💬 WhatsApp पर जुड़ें</a></div></body></html>` }
             ];
-            let currentStep = 1, pkgLocked = true, currentProjectId = "proj_kundli", latestApkName = "";
-            let state = { id: currentProjectId, mode: "HTML", websiteUrl: "", htmlCode: DEFAULT_TEMPLATES[0].code, appName: "APMBS vaidik kundli pro", iconDataUrl: "", packageName: "com.apmbs.vaidikkundlipro", version: "1.0.6", enableSplash: true, splashBgColor: "#0D0E12", splashTextColor: "#FFFFFF", orientation: "Portrait", fixedTextSize: true, fullscreenMode: false, enableZoom: true, copyProtection: true, appPinLock: "", whatsNewMsg: "", permissions: ["STORAGE", "SAF"] };
+            let currentStep = 1, pkgLocked = true, currentProjectId = "proj_kundli_v2", latestApkName = "";
+            let state = { id: currentProjectId, mode: "HTML", websiteUrl: "", zipDataUrl: "", zipName: "", htmlCode: DEFAULT_TEMPLATES[0].code, appName: "APMBS vaidik kundli pro", iconDataUrl: "", iconBgColor: "#4F46E5", packageName: "com.apmbs.vaidikkundlipro", version: "2.0.0", enableSplash: true, splashDuration: "1.5", splashBgColor: "#0D0E12", splashTextColor: "#FFFFFF", splashImageDataUrl: "", statusBarColor: "#0D0E12", lightStatusBar: false, showProgressBar: true, progressBarColor: "#6366F1", orientation: "Portrait", fixedTextSize: true, fullscreenMode: false, enableZoom: true, copyProtection: true, blockScreenshots: false, keepScreenOn: true, confirmExit: true, pullToRefresh: false, appPinLock: "", whatsNewMsg: "", permissions: ["STORAGE", "SAF"] };
 
             window.addEventListener("DOMContentLoaded", () => {
-              const all = JSON.parse(localStorage.getItem("apmbs_projects") || "{}");
+              const all = JSON.parse(localStorage.getItem("apmbs_projects_v2") || "{}");
               if (all[currentProjectId]) state = { ...state, ...all[currentProjectId] };
-              if (!state.iconDataUrl) state.iconDataUrl = generateAutoIcon(state.appName);
+              if (!state.htmlCode || !state.htmlCode.trim()) state.htmlCode = DEFAULT_TEMPLATES[0].code;
+              if (!state.appName || !state.appName.trim()) state.appName = "APMBS vaidik kundli pro";
+              if (!state.iconDataUrl) state.iconDataUrl = generateAutoIcon(state.appName, state.iconBgColor);
               applyStateToForm(); renderDownloadsList();
             });
             function showToast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(window._tt); window._tt = setTimeout(() => t.style.display = "none", 2600); }
@@ -1441,31 +1478,112 @@ jobs:
               document.getElementById("nextBtn").textContent = step === 5 ? "🚀 Generate APK" : "Continue";
               if (step === 5) { document.getElementById("summaryAppName").textContent = state.appName; document.getElementById("summarySub").textContent = `${state.mode} • version ${state.version}`; document.getElementById("summaryPkg").textContent = state.packageName; }
             }
-                   function nextStep() { if (currentStep < 5) goStep(currentStep + 1); else startOfflineApkBuild(); }
+            function nextStep() { if (currentStep < 5) goStep(currentStep + 1); else startOfflineApkBuild(); }
             function prevStep() { if (currentStep > 1) goStep(currentStep - 1); }
-            function selectMode(mode) { state.mode = mode; document.querySelectorAll(".mode-box").forEach(b => b.classList.toggle("active", b.dataset.mode === mode)); document.getElementById("websiteInputWrap").classList.toggle("hidden", mode !== "Website"); document.getElementById("htmlInputWrap").classList.toggle("hidden", mode === "Website"); saveProject(); }
+            function selectMode(mode) {
+              state.mode = mode;
+              document.querySelectorAll(".mode-box").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+              document.getElementById("websiteInputWrap").classList.toggle("hidden", mode !== "Website");
+              document.getElementById("zipInputWrap").classList.toggle("hidden", mode !== "Offline ZIP");
+              document.getElementById("htmlInputWrap").classList.toggle("hidden", mode !== "HTML");
+              saveProject();
+            }
+            function handleZipUpload(e) {
+              const f = e.target.files[0]; if (!f) return;
+              const r = new FileReader();
+              r.onload = () => { state.zipDataUrl = r.result; state.zipName = f.name; document.getElementById("zipStatus").textContent = `✅ ZIP Loaded: ${f.name} (${(f.size/1024).toFixed(1)} KB)`; saveProject(); showToast("📦 Offline ZIP ready!"); };
+              r.readAsDataURL(f);
+            }
             function updateCodeStatus() { state.htmlCode = document.getElementById("htmlCode").value; document.getElementById("codeStatus").textContent = `✅ index.html loaded (${(new Blob([state.htmlCode]).size / 1024).toFixed(1)} KB)`; saveProject(); }
             async function pasteFromClipboard() { try { document.getElementById("htmlCode").value = await navigator.clipboard.readText(); updateCodeStatus(); showToast("📋 Pasted!"); } catch (e) { showToast("Long-press box and tap Paste"); } }
-            function handleFileUpload(e) { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { document.getElementById("htmlCode").value = r.result; updateCodeStatus(); showToast("✅ Loaded!"); }; r.readAsText(f); }
+            function handleFileUpload(e) { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { document.getElementById("htmlCode").value = r.result; updateCodeStatus(); showToast("✅ HTML loaded!"); }; r.readAsText(f); }
             function copyHtmlCode() { navigator.clipboard.writeText(document.getElementById("htmlCode").value); showToast("📄 Copied!"); }
             function onAppNameChange() { state.appName = document.getElementById("appName").value.trim() || "APMBS App"; document.getElementById("headerTitle").textContent = state.appName; if (!pkgLocked) { state.packageName = "com.apmbs." + (state.appName.toLowerCase().replace(/[^a-z0-9]/g, "") || "app"); document.getElementById("packageName").value = state.packageName; } saveProject(); }
             function togglePackageLock() { pkgLocked = !pkgLocked; document.getElementById("packageName").readOnly = pkgLocked; document.getElementById("pkgLockBtn").textContent = pkgLocked ? "🔒" : "🔓"; }
-            function bumpVersion() { const p = (document.getElementById("appVersion").value || "1.0.0").split(".").map(n => parseInt(n, 10) || 0); p[2] = (p[2] || 0) + 1; document.getElementById("appVersion").value = p.join("."); syncState(); }
-            function generateAutoIcon(name) { const c = document.createElement("canvas"); c.width = 512; c.height = 512; const ctx = c.getContext("2d"); ctx.fillStyle = "#4F46E5"; ctx.fillRect(0, 0, 512, 512); ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 220px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText((name || "A").slice(0, 2).toUpperCase(), 256, 270); return c.toDataURL("image/png"); }
-            function resetAutoIcon() { state.iconDataUrl = generateAutoIcon(state.appName); document.getElementById("appIconPreview").src = state.iconDataUrl; saveProject(); }
-            function handleIconUpload(e) { const f = e.target.files[0]; if (!f) return; const img = new Image(); img.onload = () => { const c = document.createElement("canvas"); c.width = 512; c.height = 512; const ctx = c.getContext("2d"); const s = Math.min(img.width, img.height); ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512); state.iconDataUrl = c.toDataURL("image/png"); document.getElementById("appIconPreview").src = state.iconDataUrl; saveProject(); showToast("✅ 512x512 Icon set!"); }; img.src = URL.createObjectURL(f); }
+            function bumpVersion() { const p = (document.getElementById("appVersion").value || "2.0.0").split(".").map(n => parseInt(n, 10) || 0); p[2] = (p[2] || 0) + 1; document.getElementById("appVersion").value = p.join("."); syncState(); }
+            function onIconColorChange() { state.iconBgColor = document.getElementById("iconBgColor").value; resetAutoIcon(); }
+            function generateAutoIcon(name, bg) { const c = document.createElement("canvas"); c.width = 512; c.height = 512; const ctx = c.getContext("2d"); ctx.fillStyle = bg || "#4F46E5"; ctx.fillRect(0, 0, 512, 512); ctx.fillStyle = "#FFFFFF"; ctx.font = "bold 220px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText((name || "A").slice(0, 2).toUpperCase(), 256, 270); return c.toDataURL("image/png"); }
+            function resetAutoIcon() { state.iconDataUrl = generateAutoIcon(state.appName, state.iconBgColor); document.getElementById("appIconPreview").src = state.iconDataUrl; saveProject(); }
+            function handleIconUpload(e) { const f = e.target.files[0]; if (!f) return; const img = new Image(); img.onload = () => { const c = document.createElement("canvas"); c.width = 512; c.height = 512; const ctx = c.getContext("2d"); ctx.fillStyle = state.iconBgColor || "#4F46E5"; ctx.fillRect(0, 0, 512, 512); const s = Math.min(img.width, img.height); ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512); state.iconDataUrl = c.toDataURL("image/png"); document.getElementById("appIconPreview").src = state.iconDataUrl; saveProject(); showToast("✅ 512x512 Icon set!"); }; img.src = URL.createObjectURL(f); }
+            function handleSplashUpload(e) { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { state.splashImageDataUrl = r.result; saveProject(); showToast("🖼️ Custom splash image set!"); }; r.readAsDataURL(f); }
+            function clearSplashImage() { state.splashImageDataUrl = ""; saveProject(); showToast("Splash image reset"); }
             function setSeg(k, v, el) { state[k] = v; el.parentElement.querySelectorAll(".seg-btn").forEach(b => b.classList.remove("active")); el.classList.add("active"); saveProject(); }
             function togglePerm(el) { el.classList.toggle("checked"); const lbl = el.textContent.replace(/^☑️|^⬜/, "").trim(); el.textContent = (el.classList.contains("checked") ? "☑️ " : "⬜ ") + lbl; syncState(); }
-            function syncState() { state.websiteUrl = document.getElementById("websiteUrl").value; state.htmlCode = document.getElementById("htmlCode").value; state.appName = document.getElementById("appName").value; state.packageName = document.getElementById("packageName").value; state.version = document.getElementById("appVersion").value; state.enableSplash = document.getElementById("enableSplash").checked; state.splashBgColor = document.getElementById("splashBgColor").value; state.splashTextColor = document.getElementById("splashTextColor").value; state.fixedTextSize = document.getElementById("fixedTextSize").checked; state.fullscreenMode = document.getElementById("fullscreenMode").checked; state.enableZoom = document.getElementById("enableZoom").checked; state.copyProtection = document.getElementById("copyProtection").checked; state.appPinLock = document.getElementById("appPinLock").value; state.whatsNewMsg = document.getElementById("whatsNewMsg").value; state.permissions = Array.from(document.querySelectorAll(".perm-item.checked")).map(e => e.dataset.perm); saveProject(); }
-            function applyStateToForm() { document.getElementById("headerTitle").textContent = state.appName; document.getElementById("websiteUrl").value = state.websiteUrl || ""; document.getElementById("htmlCode").value = state.htmlCode || ""; document.getElementById("appName").value = state.appName; document.getElementById("appIconPreview").src = state.iconDataUrl; document.getElementById("packageName").value = state.packageName; document.getElementById("appVersion").value = state.version; document.getElementById("enableSplash").checked = state.enableSplash; document.getElementById("splashBgColor").value = state.splashBgColor; document.getElementById("splashTextColor").value = state.splashTextColor; document.getElementById("fixedTextSize").checked = state.fixedTextSize; document.getElementById("fullscreenMode").checked = state.fullscreenMode; document.getElementById("enableZoom").checked = state.enableZoom; document.getElementById("copyProtection").checked = state.copyProtection; document.getElementById("appPinLock").value = state.appPinLock || ""; document.getElementById("whatsNewMsg").value = state.whatsNewMsg || ""; selectMode(state.mode || "HTML"); updateCodeStatus(); }
-            function buildWrappedHtml() { const bridge = `<script>window.WebToApk={vibrate:function(m){if(window.AndroidBridge)AndroidBridge.vibrate(m||50)},shareText:function(t){if(window.AndroidBridge)AndroidBridge.shareText(t)},authenticateBiometric:function(cb){window.onBiometricSuccess=cb;if(window.AndroidBridge)AndroidBridge.authBio()},saveFile:function(n,b){if(window.AndroidBridge)AndroidBridge.saveFile(n,b)}};<\/script>`; const raw = state.htmlCode || "<h1>APMBS App</h1>"; return raw.includes("</body>") ? raw.replace("</body>", bridge + "</body>") : raw + bridge; }
-            function startOfflineApkBuild() { syncState(); document.getElementById("buildProgressBar").style.width = "10%"; document.getElementById("buildStatusText").textContent = "Starting 100% Offline Kotlin Compiler..."; document.getElementById("buildProgressModal").classList.add("open"); if (window.StudioNative && window.StudioNative.buildOfflineApk) window.StudioNative.buildOfflineApk(JSON.stringify(state), buildWrappedHtml()); }
+          HTMLEOF
+                    cat << 'HTMLEOF' >> studio/app/src/main/assets/studio.html
+            function syncState() {
+              state.websiteUrl = document.getElementById("websiteUrl").value; state.htmlCode = document.getElementById("htmlCode").value;
+              state.appName = document.getElementById("appName").value.trim() || "APMBS App"; state.packageName = document.getElementById("packageName").value;
+              state.version = document.getElementById("appVersion").value; state.iconBgColor = document.getElementById("iconBgColor").value;
+              state.enableSplash = document.getElementById("enableSplash").checked; state.splashDuration = document.getElementById("splashDuration").value;
+              state.splashBgColor = document.getElementById("splashBgColor").value; state.splashTextColor = document.getElementById("splashTextColor").value;
+              state.statusBarColor = document.getElementById("statusBarColor").value; state.lightStatusBar = document.getElementById("lightStatusBar").checked;
+              state.showProgressBar = document.getElementById("showProgressBar").checked; state.progressBarColor = document.getElementById("progressBarColor").value;
+              state.fixedTextSize = document.getElementById("fixedTextSize").checked; state.fullscreenMode = document.getElementById("fullscreenMode").checked;
+              state.enableZoom = document.getElementById("enableZoom").checked; state.copyProtection = document.getElementById("copyProtection").checked;
+              state.blockScreenshots = document.getElementById("blockScreenshots").checked; state.keepScreenOn = document.getElementById("keepScreenOn").checked;
+              state.confirmExit = document.getElementById("confirmExit").checked; state.pullToRefresh = document.getElementById("pullToRefresh").checked;
+              state.appPinLock = document.getElementById("appPinLock").value; state.whatsNewMsg = document.getElementById("whatsNewMsg").value;
+              state.permissions = Array.from(document.querySelectorAll(".perm-item.checked")).map(e => e.dataset.perm);
+              saveProject();
+            }
+            function applyStateToForm() {
+              document.getElementById("headerTitle").textContent = state.appName; document.getElementById("websiteUrl").value = state.websiteUrl || "";
+              document.getElementById("htmlCode").value = state.htmlCode || ""; document.getElementById("appName").value = state.appName;
+              document.getElementById("appIconPreview").src = state.iconDataUrl; document.getElementById("iconBgColor").value = state.iconBgColor || "#4F46E5";
+              document.getElementById("packageName").value = state.packageName; document.getElementById("appVersion").value = state.version;
+              document.getElementById("enableSplash").checked = state.enableSplash; document.getElementById("splashDuration").value = state.splashDuration || "1.5";
+              document.getElementById("splashBgColor").value = state.splashBgColor; document.getElementById("splashTextColor").value = state.splashTextColor;
+              document.getElementById("statusBarColor").value = state.statusBarColor || "#0D0E12"; document.getElementById("lightStatusBar").checked = !!state.lightStatusBar;
+              document.getElementById("showProgressBar").checked = state.showProgressBar !== false; document.getElementById("progressBarColor").value = state.progressBarColor || "#6366F1";
+              document.getElementById("fixedTextSize").checked = state.fixedTextSize; document.getElementById("fullscreenMode").checked = state.fullscreenMode;
+              document.getElementById("enableZoom").checked = state.enableZoom; document.getElementById("copyProtection").checked = state.copyProtection;
+              document.getElementById("blockScreenshots").checked = !!state.blockScreenshots; document.getElementById("keepScreenOn").checked = state.keepScreenOn !== false;
+              document.getElementById("confirmExit").checked = state.confirmExit !== false; document.getElementById("pullToRefresh").checked = !!state.pullToRefresh;
+              document.getElementById("appPinLock").value = state.appPinLock || ""; document.getElementById("whatsNewMsg").value = state.whatsNewMsg || "";
+              if (state.zipName) document.getElementById("zipStatus").textContent = `✅ ZIP Loaded: ${state.zipName}`;
+              selectMode(state.mode || "HTML"); updateCodeStatus();
+            }
+            function buildWrappedHtml() {
+              const bridge = `<script>window.WebToApk={vibrate:function(m){if(window.AndroidBridge)AndroidBridge.vibrate(m||50)},shareText:function(t){if(window.AndroidBridge)AndroidBridge.shareText(t)},authenticateBiometric:function(cb){window.onBiometricSuccess=cb;if(window.AndroidBridge)AndroidBridge.authBio()},saveFile:function(n,b){if(window.AndroidBridge)AndroidBridge.saveFile(n,b)}};<\/script>`;
+              const raw = state.htmlCode || "<h1>APMBS App</h1>";
+              return raw.includes("</body>") ? raw.replace("</body>", bridge + "</body>") : raw + bridge;
+            }
+            function startOfflineApkBuild() {
+              syncState();
+              document.getElementById("buildProgressBar").style.width = "10%";
+              document.getElementById("buildStatusText").textContent = "Starting v2.0 100% Offline Kotlin Compiler...";
+              document.getElementById("buildProgressModal").classList.add("open");
+              if (window.StudioNative && window.StudioNative.buildOfflineApk) window.StudioNative.buildOfflineApk(JSON.stringify(state), buildWrappedHtml());
+            }
             window.onNativeBuildProgress = function(pct, msg) { document.getElementById("buildProgressBar").style.width = pct + "%"; document.getElementById("buildStatusText").textContent = msg; };
-            window.onNativeBuildComplete = function(res) { document.getElementById("buildProgressModal").classList.remove("open"); latestApkName = res.apkFileName; document.getElementById("resApkFilename").textContent = res.apkFileName; document.getElementById("resSha1").textContent = res.sha1; document.getElementById("resSha256").textContent = res.sha256; const list = JSON.parse(localStorage.getItem("apmbs_downloads") || "[]"); list.unshift({ id: "dl_" + Date.now(), title: res.apkFileName, meta: `Signed APK • ${res.sizeKb} KB`, date: new Date().toLocaleString() }); localStorage.setItem("apmbs_downloads", JSON.stringify(list)); renderDownloadsList(); document.getElementById("buildSuccessModal").classList.add("open"); };
+            window.onNativeBuildComplete = function(res) {
+              document.getElementById("buildProgressModal").classList.remove("open"); latestApkName = res.apkFileName;
+              document.getElementById("resApkFilename").textContent = res.apkFileName; document.getElementById("resSha1").textContent = res.sha1; document.getElementById("resSha256").textContent = res.sha256;
+              const list = JSON.parse(localStorage.getItem("apmbs_downloads") || "[]");
+              list.unshift({ id: "dl_" + Date.now(), title: res.apkFileName, meta: `Signed APK • ${res.sizeKb} KB`, date: new Date().toLocaleString() });
+              localStorage.setItem("apmbs_downloads", JSON.stringify(list)); renderDownloadsList(); document.getElementById("buildSuccessModal").classList.add("open");
+            };
             window.onNativeBuildError = function(err) { document.getElementById("buildProgressModal").classList.remove("open"); alert("Build Error: " + err); };
             function installLatestApk() { if (window.StudioNative && latestApkName) window.StudioNative.installApk(latestApkName); }
             function shareLatestApk() { if (window.StudioNative && latestApkName) window.StudioNative.shareApkFile(latestApkName, ""); }
             function backupSigningKey() { if (window.StudioNative) window.StudioNative.exportKeystoreP12(state.packageName, state.appName); }
+            function openImportKeyModal() { document.getElementById("importKeyModal").classList.add("open"); }
+            function submitImportKeystore() {
+              const f = document.getElementById("p12FileInput").files[0];
+              const pass = document.getElementById("p12PasswordInput").value;
+              const alias = document.getElementById("p12AliasInput").value.trim();
+              if (!f || !pass) { alert("Select .p12 file and enter password"); return; }
+              const r = new FileReader();
+              r.onload = () => {
+                if (window.StudioNative && window.StudioNative.importKeystoreP12) {
+                  const res = JSON.parse(window.StudioNative.importKeystoreP12(state.packageName, r.result, pass, alias));
+                  if (res.ok) { document.getElementById("keyStatusBanner").textContent = `✅ Custom Keystore Linked (Alias: ${res.alias})`; closeModal("importKeyModal"); showToast("🔑 Keystore imported!"); }
+                  else alert("Keystore error: " + res.error);
+                }
+              };
+              r.readAsDataURL(f);
+            }
             function closeSuccessAndOpenDownloads() { closeModal("buildSuccessModal"); openDownloadsScreen(); }
             function openDownloadsScreen() { document.getElementById("wizardView").classList.add("hidden"); document.getElementById("downloadsView").classList.remove("hidden"); renderDownloadsList(); }
             function closeDownloadsScreen() { document.getElementById("downloadsView").classList.add("hidden"); document.getElementById("wizardView").classList.remove("hidden"); }
@@ -1475,10 +1593,10 @@ jobs:
             function applyTpl(id) { const t = [...DEFAULT_TEMPLATES, ...JSON.parse(localStorage.getItem("apmbs_custom_templates") || "[]")].find(x => x.id === id); if (!t) return; selectMode("HTML"); document.getElementById("htmlCode").value = t.code; updateCodeStatus(); closeModal("templatesModal"); showToast("✅ Template loaded!"); }
             function saveCurrentAsTemplate() { const name = prompt("Template Name:"); if (!name) return; const custom = JSON.parse(localStorage.getItem("apmbs_custom_templates") || "[]"); custom.push({ id: "tpl_" + Date.now(), name, desc: "Saved template", code: document.getElementById("htmlCode").value }); localStorage.setItem("apmbs_custom_templates", JSON.stringify(custom)); showToast("⭐ Saved!"); }
             function importNewTemplate(e) { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const custom = JSON.parse(localStorage.getItem("apmbs_custom_templates") || "[]"); custom.push({ id: "tpl_" + Date.now(), name: f.name, desc: "Imported template", code: r.result }); localStorage.setItem("apmbs_custom_templates", JSON.stringify(custom)); openTemplatesModal(); }; r.readAsText(f); }
-            function saveProject() { const all = JSON.parse(localStorage.getItem("apmbs_projects") || "{}"); all[state.id] = state; localStorage.setItem("apmbs_projects", JSON.stringify(all)); }
-            function openProjectsModal() { const all = Object.values(JSON.parse(localStorage.getItem("apmbs_projects") || "{}")); document.getElementById("projectsList").innerHTML = all.map(p => `<div class="dl-card" onclick="switchProj('${p.id}')" style="cursor:pointer;"><b>${p.appName}</b> (v${p.version})<div class="field-hint">${p.packageName}</div></div>`).join(""); document.getElementById("projectsModal").classList.add("open"); }
-            function switchProj(id) { const all = JSON.parse(localStorage.getItem("apmbs_projects") || "{}"); if (all[id]) { state = all[id]; currentProjectId = id; applyStateToForm(); closeModal("projectsModal"); goStep(1); } }
-            function createNewProject() { const name = prompt("New App Name:", "My New App"); if (!name) return; state = { ...state, id: "proj_" + Date.now(), appName: name, packageName: "com.apmbs." + (name.toLowerCase().replace(/[^a-z0-9]/g, "") || "app"), version: "1.0.0", iconDataUrl: generateAutoIcon(name), htmlCode: DEFAULT_TEMPLATES[2].code }; saveProject(); applyStateToForm(); closeModal("projectsModal"); goStep(1); }
+            function saveProject() { const all = JSON.parse(localStorage.getItem("apmbs_projects_v2") || "{}"); all[state.id] = state; localStorage.setItem("apmbs_projects_v2", JSON.stringify(all)); }
+            function openProjectsModal() { const all = Object.values(JSON.parse(localStorage.getItem("apmbs_projects_v2") || "{}")); document.getElementById("projectsList").innerHTML = all.map(p => `<div class="dl-card" onclick="switchProj('${p.id}')" style="cursor:pointer;"><b>${p.appName}</b> (v${p.version})<div class="field-hint">${p.packageName}</div></div>`).join(""); document.getElementById("projectsModal").classList.add("open"); }
+            function switchProj(id) { const all = JSON.parse(localStorage.getItem("apmbs_projects_v2") || "{}"); if (all[id]) { state = all[id]; currentProjectId = id; applyStateToForm(); closeModal("projectsModal"); goStep(1); } }
+            function createNewProject() { const name = prompt("New App Name:", "My New App"); if (!name) return; state = { ...state, id: "proj_" + Date.now(), appName: name, packageName: "com.apmbs." + (name.toLowerCase().replace(/[^a-z0-9]/g, "") || "app"), version: "1.0.0", iconDataUrl: generateAutoIcon(name, state.iconBgColor), htmlCode: DEFAULT_TEMPLATES[2].code }; saveProject(); applyStateToForm(); closeModal("projectsModal"); goStep(1); }
             function openLivePreview() { syncState(); document.getElementById("previewIframe").srcdoc = buildWrappedHtml(); document.getElementById("previewModal").classList.add("open"); }
             function closeModal(id) { document.getElementById(id).classList.remove("open"); }
             function copyTextById(id) { navigator.clipboard.writeText(document.getElementById(id).textContent); showToast("📋 Copied!"); }
@@ -1494,7 +1612,6 @@ jobs:
       - name: Upload APMBS App Studio APK
         uses: actions/upload-artifact@v4
         with:
-          name: APMBS_App_Studio_v1.0.0
+          name: APMBS_App_Studio_v2.0.0
           path: studio/app/build/outputs/apk/release/app-release.apk
           
-        
