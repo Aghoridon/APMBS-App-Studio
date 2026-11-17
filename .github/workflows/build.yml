@@ -517,9 +517,10 @@ jobs:
           }
           KOTLINEOF
 
-            - name: Compile Base Template APK
+      - name: Compile Base Template APK
         working-directory: template
         run: gradle assembleRelease
+
 
       - name: Create APMBS App Studio Native Kotlin Project
         run: |
